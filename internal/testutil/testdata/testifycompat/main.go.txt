@@ -1,0 +1,137 @@
+// Command testifycompat compares raftseg's internal/testutil with testify
+// v1.10.0 over a battery of values: every check must pass or fail exactly
+// as testify does, except that ordering values of different types fails in
+// testutil (testify orders values that share a kind). Run with run.sh; it
+// lives outside the raftseg module so that testify never enters raftseg's
+// go.mod.
+package main
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"os"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	tu "tucmp/tu"
+)
+
+type rec struct{ failed bool }
+
+func (r *rec) Helper()               {}
+func (r *rec) Errorf(string, ...any) { r.failed = true }
+func (r *rec) FailNow()              { r.failed = true }
+
+type S struct {
+	A int
+	B []byte
+	C []int
+	P *int
+}
+
+type myErr struct{ s string }
+
+func (e *myErr) Error() string { return e.s }
+
+type Celsius int
+type Name string
+
+func main() {
+	one, two := 1, 2
+	var nilp *int
+	var nilS *S
+	var nilErr error
+	var nilIface fmt.Stringer
+	ch := make(chan int, 2)
+	ch2 := make(chan int, 2)
+	ch2 <- 1
+	t0 := time.Unix(0, 0)
+	t1 := time.Unix(1, 0)
+	e1 := errors.New("x")
+	wrapped := fmt.Errorf("w: %w", io.EOF)
+	vals := []any{
+		nil, nilp, nilS, nilErr, nilIface, &one, &two, 0, 1, -1, int64(0), int64(1), int32(1), uint8(0), uint8(1),
+		uint64(0), uint64(1), uint64(math.MaxUint64), 1.0, 0.0, math.NaN(), float32(1), "", "a", "b", Name("a"), Celsius(1),
+		true, false, []byte(nil), []byte{}, []byte("a"), []byte("b"), []int(nil), []int{}, []int{1}, []int{1, 2},
+		[]any{nil}, map[string]int(nil), map[string]int{}, map[string]int{"a": 1}, [0]int{}, [2]int{}, [2]int{1, 0},
+		struct{}{}, S{}, S{A: 1}, S{B: []byte{}}, S{C: []int{}}, &S{}, &S{A: 1}, S{P: &one}, S{P: &two},
+		ch, ch2, (chan int)(nil), e1, errors.New("x"), io.EOF, wrapped, &myErr{"x"}, t0, t1, time.Time{},
+		func() {}, (func())(nil), uintptr(1), complex(1, 0),
+	}
+	mismatch, stricter := 0, 0
+	sameType := true
+	check := func(name string, f1 func(*rec) bool, f2 func(*rec) bool, desc string) {
+		r1, r2 := &rec{}, &rec{}
+		var p1, p2 any
+		var b1, b2 bool
+		func() { defer func() { p1 = recover() }(); b1 = f1(r1) }()
+		func() { defer func() { p2 = recover() }(); b2 = f2(r2) }()
+		// A panic fails the test just as a reported failure does.
+		x1, f2v := r1.failed || p1 != nil, r2.failed || p2 != nil
+		if x1 != f2v || (!x1 && b1 != b2) || (p1 == nil && p2 == nil && b1 != b2) {
+			// Ours may be stricter than testify only when ordering values of
+			// different types (testify orders by kind, with conversions).
+			if !x1 && f2v && !sameType && name != "Equal" && name != "NotEqual" {
+				stricter++
+				return
+			}
+			mismatch++
+			fmt.Printf("MISMATCH %s(%s): testify failed=%v ret=%v panic=%v; ours failed=%v ret=%v panic=%v\n", name, desc, r1.failed, b1, p1, r2.failed, b2, p2)
+		}
+	}
+	n := 0
+	for i, a := range vals {
+		for j, b := range vals {
+			d := fmt.Sprintf("#%d %T %#v, #%d %T %#v", i, a, a, j, b, b)
+			sameType = fmt.Sprintf("%T", a) == fmt.Sprintf("%T", b)
+			check("Equal", func(r *rec) bool { return assert.Equal(r, a, b) }, func(r *rec) bool { return tu.Equal(r, a, b, nil) }, d)
+			check("NotEqual", func(r *rec) bool { return assert.NotEqual(r, a, b) }, func(r *rec) bool { return tu.NotEqual(r, a, b, nil) }, d)
+			check("Greater", func(r *rec) bool { return assert.Greater(r, a, b) }, func(r *rec) bool { return tu.Ordered(r, a, b, func(c int) bool { return c > 0 }, ">", nil) }, d)
+			check("GreaterOrEqual", func(r *rec) bool { return assert.GreaterOrEqual(r, a, b) }, func(r *rec) bool { return tu.Ordered(r, a, b, func(c int) bool { return c >= 0 }, ">=", nil) }, d)
+			check("Less", func(r *rec) bool { return assert.Less(r, a, b) }, func(r *rec) bool { return tu.Ordered(r, a, b, func(c int) bool { return c < 0 }, "<", nil) }, d)
+			check("LessOrEqual", func(r *rec) bool { return assert.LessOrEqual(r, a, b) }, func(r *rec) bool { return tu.Ordered(r, a, b, func(c int) bool { return c <= 0 }, "<=", nil) }, d)
+			ea, _ := a.(error)
+			eb, _ := b.(error)
+			if a == nil || ea != nil {
+				if b == nil || eb != nil {
+					check("ErrorIs", func(r *rec) bool { return assert.ErrorIs(r, ea, eb) }, func(r *rec) bool { return tu.ErrorIs(r, ea, eb, nil) }, d)
+				}
+			}
+			n += 6
+		}
+		d := fmt.Sprintf("#%d %T %#v", i, a, a)
+		sameType = true
+		check("Empty", func(r *rec) bool { return assert.Empty(r, a) }, func(r *rec) bool { return tu.Empty(r, a, nil) }, d)
+		check("NotEmpty", func(r *rec) bool { return assert.NotEmpty(r, a) }, func(r *rec) bool { return tu.NotEmpty(r, a, nil) }, d)
+		check("Zero", func(r *rec) bool { return assert.Zero(r, a) }, func(r *rec) bool { return tu.Zero(r, a, nil) }, d)
+		check("NotZero", func(r *rec) bool { return assert.NotZero(r, a) }, func(r *rec) bool { return tu.NotZero(r, a, nil) }, d)
+		check("Nil", func(r *rec) bool { return assert.Nil(r, a) }, func(r *rec) bool { return tu.Nil(r, a, nil) }, d)
+		check("NotNil", func(r *rec) bool { return assert.NotNil(r, a) }, func(r *rec) bool { return tu.NotNil(r, a, nil) }, d)
+		for l := -1; l <= 2; l++ {
+			check("Len", func(r *rec) bool { return assert.Len(r, a, l) }, func(r *rec) bool { return tu.LenIs(r, a, l, nil) }, fmt.Sprintf("%s, %d", d, l))
+		}
+		if b, ok := a.(bool); ok {
+			check("True", func(r *rec) bool { return assert.True(r, b) }, func(r *rec) bool { return tu.True(r, b, nil) }, d)
+			check("False", func(r *rec) bool { return assert.False(r, b) }, func(r *rec) bool { return tu.False(r, b, nil) }, d)
+		}
+		if e, ok := a.(error); ok || a == nil {
+			check("NoError", func(r *rec) bool { return assert.NoError(r, e) }, func(r *rec) bool { return tu.NoError(r, e, nil) }, d)
+			check("Error", func(r *rec) bool { return assert.Error(r, e) }, func(r *rec) bool { return tu.Error(r, e, nil) }, d)
+		}
+		n += 10
+	}
+	for _, f := range []func(){func() {}, func() { panic(1) }, func() { panic(nil) }, func() { panic(errors.New("e")) }} {
+		check("Panics", func(r *rec) bool { return assert.Panics(r, f) }, func(r *rec) bool { return tu.Panics(r, f, nil) }, "f")
+	}
+	// Typed nil error.
+	var tn *myErr
+	var te error = tn
+	check("NoError", func(r *rec) bool { return assert.NoError(r, te) }, func(r *rec) bool { return tu.NoError(r, te, nil) }, "typed nil error")
+	check("Error", func(r *rec) bool { return assert.Error(r, te) }, func(r *rec) bool { return tu.Error(r, te, nil) }, "typed nil error")
+	fmt.Printf("%d values, about %d checks: %d mismatches, %d stricter on mixed types\n", len(vals), n, mismatch, stricter)
+	if mismatch > 0 {
+		os.Exit(1)
+	}
+}

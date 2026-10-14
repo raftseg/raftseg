@@ -1,0 +1,40 @@
+raftseg
+Copyright 2026 The raftseg authors.
+
+This module contains code from the third-party projects below, and
+requires the first-party raft module, a fork of a third-party project.
+The third-party code is licensed under the Apache License, Version 2.0,
+whose text is kept next to it. Neither upstream project ships a NOTICE
+file of its own. Every file modified by the raftseg authors says so in its
+header.
+
+github.com/raftseg/raft  (a separate module, compiled into products)
+    raftseg requires this first-party module, a fork of etcd raft v3.6.0
+    (Apache License 2.0, copyright The etcd Authors). It carries its own
+    LICENSE and NOTICE, which products that compile it in must include;
+    its FORK.md lists every change from upstream, and upstream.json the
+    upstream release and the upstream commits cherry-picked since.
+
+seglog/  (compiled into products)
+    Written by the raftseg authors. Its segment files use the record format
+    of LevelDB's log files, as implemented by Pebble
+    (github.com/cockroachdb/pebble, BSD-3-Clause): 32 KiB blocks of chunks,
+    each with a masked CRC-32C. seglog implements the format itself and
+    includes no LevelDB or Pebble code. seglog/testdata/wire_golden.json and
+    wire_edge.bin.gz are streams written by Pebble's record.Writer
+    (github.com/cockroachdb/pebble/v2 v2.1.7) for the compatibility tests;
+    seglog/testdata/genwire.go.txt is the program that wrote them.
+
+internal/datadriven/  (used by tests only; not compiled into products)
+    Origin:     github.com/cockroachdb/datadriven
+                v1.0.3-0.20250407164829-2945557346d5
+    Copyright:  The Cockroach Authors
+    License:    internal/datadriven/LICENSE
+    Changes:    The github.com/pmezard/go-difflib dependency was replaced
+                by diff.go, which uses only the standard library.
+
+internal/testutil/  (used by tests only; not compiled into products)
+    Written by the raftseg authors. Its API and failure behaviour follow
+    github.com/stretchr/testify (MIT), so that the upstream raft tests run
+    unchanged. No testify code is included.
+    testdata/testifycompat compares the two directly.

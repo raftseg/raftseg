@@ -1,0 +1,193 @@
+// Command wiregold writes seglog/testdata/wire_golden.json and
+// wire_edge.bin.gz with Pebble's own record.Writer, so that seglog's tests
+// can check its segment format against Pebble without depending on it.
+//
+// It runs in a scratch module whose go.mod requires
+// github.com/cockroachdb/pebble/v2 v2.1.7:
+//
+//	go run . /path/to/raftseg/seglog/testdata
+package main
+
+import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"math/rand"
+	"os"
+	"path/filepath"
+
+	"github.com/cockroachdb/pebble/v2/record"
+)
+
+const (
+	blockSize       = 32 << 10
+	chunkHeaderSize = 7
+)
+
+// payloadSizes and makePayloads are copied verbatim from seglog/wire_test.go.
+func payloadSizes(rng *rand.Rand, n int) []int {
+	sizes := []int{0, 1, blockSize - 2*chunkHeaderSize, blockSize - chunkHeaderSize - 3, 0, 70 << 10, 5}
+	for len(sizes) < n {
+		switch rng.Intn(4) {
+		case 0:
+			sizes = append(sizes, rng.Intn(100))
+		case 1:
+			sizes = append(sizes, rng.Intn(blockSize))
+		case 2:
+			sizes = append(sizes, rng.Intn(3*blockSize))
+		default:
+			sizes = append(sizes, blockSize-chunkHeaderSize-rng.Intn(16))
+		}
+	}
+	return sizes
+}
+
+func makePayloads(rng *rand.Rand, sizes []int) [][]byte {
+	out := make([][]byte, len(sizes))
+	for i, n := range sizes {
+		out[i] = make([]byte, n)
+		rng.Read(out[i])
+	}
+	return out
+}
+
+// edgePayload is the content of record i of the edge stream.
+func edgePayload(i, n int) []byte { return bytes.Repeat([]byte{byte(i + 1)}, n) }
+
+type stream struct {
+	Seed   int64   `json:"seed,omitempty"`
+	N      int     `json:"n,omitempty"`
+	Sizes  []int   `json:"sizes,omitempty"`
+	Ends   []int64 `json:"ends"`
+	Size   int     `json:"size"`
+	SHA256 string  `json:"sha256"`
+}
+
+func write(payloads [][]byte) (stream, []byte) {
+	var buf bytes.Buffer
+	w := record.NewWriter(&buf)
+	var s stream
+	for i, p := range payloads {
+		end, err := w.WriteRecord(p)
+		if err != nil {
+			panic(err)
+		}
+		s.Ends = append(s.Ends, end)
+		if i%17 == 0 {
+			if err := w.Flush(); err != nil {
+				panic(err)
+			}
+		}
+	}
+	if err := w.Close(); err != nil {
+		panic(err)
+	}
+	// Pebble's own reader must read it back.
+	r := record.NewReader(bytes.NewReader(buf.Bytes()), 0)
+	for i, want := range payloads {
+		rr, err := r.Next()
+		if err != nil {
+			panic(fmt.Sprintf("record %d: %v", i, err))
+		}
+		got, err := io.ReadAll(rr)
+		if err != nil || !bytes.Equal(got, want) {
+			panic(fmt.Sprintf("record %d differs", i))
+		}
+	}
+	if _, err := r.Next(); err != io.EOF {
+		panic(fmt.Sprintf("trailing record: %v", err))
+	}
+	sum := sha256.Sum256(buf.Bytes())
+	s.Size = buf.Len()
+	s.SHA256 = hex.EncodeToString(sum[:])
+	return s, buf.Bytes()
+}
+
+// edgeSizes places record starts at every offset within 12 bytes of a block
+// end, and then writes records of 0, 1 and 2 bytes and records that end
+// exactly on a block boundary, span one boundary, or span several.
+func edgeSizes() []int {
+	var sizes []int
+	pos := 0
+	add := func(n int) {
+		if rem := blockSize - pos%blockSize; rem < chunkHeaderSize {
+			pos += rem
+		}
+		sizes = append(sizes, n)
+		left := n
+		for {
+			avail := blockSize - pos%blockSize - chunkHeaderSize
+			if left <= avail {
+				pos += chunkHeaderSize + left
+				return
+			}
+			pos += chunkHeaderSize + avail
+			left -= avail
+		}
+	}
+	for _, follow := range []int{0, 1, 2, 100, blockSize - chunkHeaderSize, blockSize, 2*blockSize + 5} {
+		for gap := 0; gap <= 12; gap++ {
+			// A record that leaves exactly gap bytes in the block it ends in.
+			rem := blockSize - pos%blockSize
+			if rem < chunkHeaderSize {
+				rem = blockSize // the next record starts in the next block
+			}
+			n := rem - chunkHeaderSize - gap
+			if n < 0 {
+				n = rem - 2*chunkHeaderSize - gap + blockSize
+			}
+			add(n)
+			if got := (blockSize - pos%blockSize) % blockSize; got != gap {
+				panic(fmt.Sprintf("gap %d: %d bytes left", gap, got))
+			}
+			add(follow)
+		}
+	}
+	return sizes
+}
+
+func main() {
+	dir := os.Args[1]
+	out := struct {
+		Generator string   `json:"generator"`
+		Random    []stream `json:"random"`
+		Edge      stream   `json:"edge"`
+	}{Generator: "github.com/cockroachdb/pebble/v2 v2.1.7 record.Writer (legacy chunks)"}
+	for _, c := range []struct {
+		seed int64
+		n    int
+	}{{1, 300}, {2, 300}, {3, 200}, {4, 100}, {5, 100}, {6, 100}, {7, 100}, {8, 100}} {
+		rng := rand.New(rand.NewSource(c.seed))
+		s, _ := write(makePayloads(rng, payloadSizes(rng, c.n)))
+		s.Seed, s.N = c.seed, c.n
+		out.Random = append(out.Random, s)
+	}
+	sizes := edgeSizes()
+	payloads := make([][]byte, len(sizes))
+	for i, n := range sizes {
+		payloads[i] = edgePayload(i, n)
+	}
+	edge, data := write(payloads)
+	edge.Sizes = sizes
+	out.Edge = edge
+
+	j, err := json.MarshalIndent(out, "", " ")
+	if err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "wire_golden.json"), append(j, '\n'), 0o644); err != nil {
+		panic(err)
+	}
+	var gz bytes.Buffer
+	zw, _ := gzip.NewWriterLevel(&gz, gzip.BestCompression)
+	zw.Write(data)
+	zw.Close()
+	if err := os.WriteFile(filepath.Join(dir, "wire_edge.bin.gz"), gz.Bytes(), 0o644); err != nil {
+		panic(err)
+	}
+	fmt.Printf("%d random streams, edge stream of %d records (%d bytes, %d gzipped)\n", len(out.Random), len(sizes), len(data), gz.Len())
+}
