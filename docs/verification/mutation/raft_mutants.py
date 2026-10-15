@@ -3,8 +3,8 @@
 #
 # Retargeted to the fork on upstream main (google.golang.org/protobuf: pointer messages read through getters). One
 # mutant of the fork on v3.6.0 is retired: "unbounded message nesting" undid the nesting limit the fork had added to
-# gogo's decoder; protobuf's decoder enforces its own limit now, which raftpb's TestNestingLimit checks. Mutants 47
-# onwards undo protections the fork added with the move to protobuf.
+# gogo's decoder; protobuf's decoder enforces its own limit now, which raftpb's TestNestingLimit checks. Mutants 46
+# onwards (counting from 0, as the results do) undo protections the fork added with the move to protobuf.
 M = []
 def m(kind, label, file, old, new):
     M.append(dict(kind=kind, label=label, file=file, old=old, new=new))

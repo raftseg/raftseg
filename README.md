@@ -21,7 +21,7 @@ this, and the SBOM tool refuses anything else.
 | `internal/raftsim/` | A deterministic, randomized cluster simulator that checks raft's safety and liveness under faults. Node storage is pluggable: in memory, in seglog on a crash-simulating filesystem, or both mixed in one cluster. Used by tests only. |
 | `internal/crashfs/` | An in-memory filesystem that shows what a power cut would leave (torn and reordered writes, lost directory operations, writeback errors) and injects errors. It is checked against the operating system's filesystem. Used by tests only. |
 | `internal/testutil/`, `internal/datadriven/` | Test helpers that replace testify and cockroachdb/datadriven. Used by tests only. |
-| `internal/depcheck/` | The dependency check: first-party modules and protobuf only, in `go.mod`, `go.sum`, imports and builds. |
+| `internal/depcheck/` | The dependency check: `go.mod`, imports and builds may name only first-party modules and protobuf, and `go.sum` only those and what protobuf's `go.mod` requires. |
 | `internal/tools/sbom/` | Writes the CycloneDX SBOM, and fails if anything but this module, first-party modules, protobuf and the Go standard library would be compiled into a product. |
 
 ### Working on raftseg and raft together
@@ -50,9 +50,9 @@ The in-memory raft log, and the combinations of in-memory and persistent nodes a
 ## Testing
 
 ```
-go test ./...                              # everything, about 3 minutes on 2 cores
-go test -short ./...                       # about a minute
-go test -short -race ./...                 # about 3.5 minutes
+go test ./...                              # everything, about 3.5 minutes on 2 cores
+go test -short ./...                       # under a minute
+go test -short -race ./...                 # about 4 minutes
 RAFTSIM_SEEDS=20000 go test ./internal/raftsim -run 'TestSimulation$' -timeout 2h   # soak, in-memory nodes
 RAFTSIM_SEEDS=5000 go test ./internal/raftsim -run 'Seglog|Mixed' -timeout 3h      # soak, seglog and mixed nodes
 RAFTSIM_SEED=1234 go test ./internal/raftsim -run 'TestSimulation$' -v             # replay one run
@@ -80,7 +80,7 @@ writes a CycloneDX 1.5 SBOM. It lists every package compiled into a product, eac
 - Code used only by tests is listed with scope "excluded".
 
 The tool fails in any of these cases:
-- `go.mod` requires or replaces a module other than first-party modules and protobuf.
+- `go.mod` requires a module other than first-party modules and protobuf, or replaces any module.
 - A first-party module requires anything but protobuf.
 - A module differs from what `go.mod` and `go.sum` pin.
 - Any package outside this module, those modules and the standard library would be compiled into a product.

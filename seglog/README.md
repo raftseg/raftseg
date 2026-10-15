@@ -42,7 +42,8 @@ The key exists because, after damage, the scanner looks for the next valid chunk
 - **Validated input.** A `Save` that raft would never issue is refused with `ErrInvalidUpdate`, and changes nothing. That covers:
   - a gap in the entries;
   - an index of 0 or above 2^63;
-  - a commit index beyond the last entry, including one left behind by an overwrite or a snapshot.
+  - a commit index beyond the last entry, including one left behind by an overwrite or a snapshot;
+  - a nil entry.
 
   Before this check, such a Save was accepted, and the next `Open` failed for every group on the node.
 - **Damage is never silent.** Damaged data is reported in one of three ways:
@@ -88,10 +89,10 @@ Each suite and what it establishes:
 | `internal/raftsim` | `TestSimulationSeglog` and `TestSimulationMixed` run the deterministic raft simulator with every node's log in seglog (or mixed with in-memory nodes). This adds all the raft safety and liveness checks, crashes that strike in the middle of a Save, and several groups sharing a node's log. The simulator also checks that no message raft and seglog share (entries, hard states, configurations, snapshots) changes after it is handed over. |
 | `internal/crashfs` | The crash model itself: `TestConformsToOS` checks that, without crashes, it behaves exactly like the operating system's filesystem, op by op. |
 
-**Mutation testing.** 58 mutants each put one mistake back into the engine: a checksum not checked, an fsync or directory sync left out, a deletion moved before the state that stops needing it is durable, a recovery check dropped, an off-by-one in the log's shape, a missing version bump. 55 are killed by the tests, and 3 are equivalent (the change cannot be observed), each explained. None survives. The table, the catalogue and the runner are in [docs/verification](../docs/verification/seglog-mutation.md).
+**Mutation testing.** 65 mutants each put one mistake back into the engine: a checksum not checked, an fsync or directory sync left out, a deletion moved before the state that stops needing it is durable, a recovery check dropped, an off-by-one in the log's shape, a missing version bump, a message shared where seglog must copy it. 61 are killed by the tests, and 4 are equivalent (the change cannot be observed), each explained. None survives. The table, the catalogue and the runner are in [docs/verification](../docs/verification/seglog-mutation.md).
 
 ```
-go test ./seglog                      # about 3 minutes on 2 cores
+go test ./seglog                      # about 3.5 minutes on 2 cores
 go test -short -race ./seglog
 SEGLOG_EXHAUSTIVE=1 go test ./seglog -run TestDamageEveryFile -timeout 2h
 go test ./seglog -run XXX -fuzz FuzzCraftedRecords      # and FuzzCraftedCheckpoint, FuzzStorageContract, FuzzCorruptLog, FuzzScanner
@@ -117,6 +118,9 @@ Each has a regression test that fails without its fix.
    - A truncated sealed segment read back as an I/O error rather than `ErrCorrupt`, and `Open` did not report it.
    - `Term` of an index near 2^64 said "compacted".
    - `Scrub` raised false alarms while GC deleted segments or a roll was sealing one.
+11. **Two defects of the port to protobuf messages,** found in review before release:
+   - A nil entry passed to `Save` crashed the process: the writer goroutine sized it before validation. It is now refused as an invalid update (`TestNilEntryRefused`).
+   - An entry with fields raftpb does not define, which protobuf keeps and encodes again, was saved, and then the log would not open: the entry index read only the wire types raftpb uses. It now skips any field, as protobuf does (`TestEntriesRoundTripExactly`, `TestEntryHeader`).
 
 ## Performance
 

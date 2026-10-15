@@ -1,0 +1,532 @@
+[
+ {
+  "i": 0,
+  "kind": "upstream",
+  "label": "isUpToDate accepts a log one entry short",
+  "upstream": true,
+  "fork_tests": true,
+  "sim": true,
+  "why": "--- FAIL: TestIsUpToDate (0.00s) / --- FAIL: TestVoter (0.00s) / --- FAIL: TestRecvMsgVote (0.00s)",
+  "secs": 29
+ },
+ {
+  "i": 1,
+  "kind": "upstream",
+  "label": "commit entries of earlier terms by count (Figure 8)",
+  "upstream": true,
+  "fork_tests": false,
+  "sim": false,
+  "why": "--- FAIL: TestLeaderOnlyCommitsLogFromCurrentTerm (0.00s) / --- FAIL: TestCommit (0.00s)",
+  "secs": 29
+ },
+ {
+  "i": 2,
+  "kind": "upstream",
+  "label": "follower commits beyond the entries it got",
+  "upstream": true,
+  "fork_tests": false,
+  "sim": false,
+  "why": "--- FAIL: TestLogMaybeAppend (0.00s) / --- FAIL: TestHandleMsgApp (0.00s)",
+  "secs": 34
+ },
+ {
+  "i": 3,
+  "kind": "upstream",
+  "label": "vote again in a term when no leader is known",
+  "upstream": true,
+  "fork_tests": false,
+  "sim": true,
+  "why": "--- FAIL: TestFollowerVote (0.00s) / --- FAIL: TestLeaderElectionOverwriteNewerLogs (0.00s) / --- FAIL: TestRecvMsgVote (0.00s)",
+  "secs": 22
+ },
+ {
+  "i": 4,
+  "kind": "upstream",
+  "label": "do not record a granted vote",
+  "upstream": true,
+  "fork_tests": false,
+  "sim": true,
+  "why": "--- FAIL: TestVoteFromAnyState (0.00s) / --- FAIL: TestInteraction (0.09s) / panic: need non-empty snapshot",
+  "secs": 23
+ },
+ {
+  "i": 5,
+  "kind": "upstream",
+  "label": "candidate does not vote for itself",
+  "upstream": true,
+  "fork_tests": false,
+  "sim": true,
+  "why": "--- FAIL: TestNodeStart (0.00s) / --- FAIL: TestPreVoteWithSplitVote (0.00s) / --- FAIL: TestRawNodeStart (0.00s)",
+  "secs": 25
+ },
+ {
+  "i": 6,
+  "kind": "upstream",
+  "label": "quorum index off by one",
+  "upstream": true,
+  "fork_tests": true,
+  "sim": true,
+  "why": "panic: test timed out after 2m0s / --- FAIL: TestDataDriven (0.00s) / panic: runtime error: index out of range [1] with length 1 [recovered, repanicked]",
+  "secs": 137
+ },
+ {
+  "i": 7,
+  "kind": "upstream",
+  "label": "vote quorum off by one",
+  "upstream": true,
+  "fork_tests": true,
+  "sim": true,
+  "why": "--- FAIL: TestFollowerStartElection (0.00s) / --- FAIL: TestCandidateStartNewElection (0.00s) / --- FAIL: TestLeaderElectionInOneRoundRPC (0.00s)",
+  "secs": 16
+ },
+ {
+  "i": 8,
+  "kind": "upstream",
+  "label": "progress accepts stale match",
+  "upstream": true,
+  "fork_tests": false,
+  "sim": false,
+  "why": "--- FAIL: TestInteraction (0.08s) / --- FAIL: TestProgressUpdate (0.00s)",
+  "secs": 23
+ },
+ {
+  "i": 9,
+  "kind": "upstream",
+  "label": "append below commit index accepted",
+  "upstream": true,
+  "fork_tests": false,
+  "sim": false,
+  "why": "--- FAIL: TestFollowerCheckMsgApp (0.00s)",
+  "secs": 20
+ },
+ {
+  "i": 10,
+  "kind": "upstream",
+  "label": "vote response sent before the vote is durable",
+  "upstream": true,
+  "fork_tests": true,
+  "sim": true,
+  "why": "panic: message should not be self-addressed when sending MsgVoteResp / panic: message should not be self-addressed when sending MsgVoteResp",
+  "secs": 10
+ },
+ {
+  "i": 11,
+  "kind": "upstream",
+  "label": "append response sent before entries are durable",
+  "upstream": true,
+  "fork_tests": true,
+  "sim": true,
+  "why": "panic: message should not be self-addressed when sending MsgAppResp / panic: message should not be self-addressed when sending MsgAppResp",
+  "secs": 13
+ },
+ {
+  "i": 12,
+  "kind": "upstream",
+  "label": "pending conf change judged against commit, not apply",
+  "upstream": false,
+  "fork_tests": false,
+  "sim": true,
+  "why": "--- FAIL: TestSimulation (5.29s) / sim_test.go:112: raftsim: panic: config is already joint / sim_test.go:112: raftsim: panic: can't leave a non-joint config",
+  "secs": 18
+ },
+ {
+  "i": 13,
+  "kind": "upstream",
+  "label": "new leader allows a conf change at once",
+  "upstream": true,
+  "fork_tests": false,
+  "sim": true,
+  "why": "--- FAIL: TestNewLeaderPendingConfig (0.00s)",
+  "secs": 22
+ },
+ {
+  "i": 14,
+  "kind": "upstream",
+  "label": "safe read completes without a quorum",
+  "upstream": true,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestReadOnlyDuplicateRequest (0.00s)",
+  "secs": 18
+ },
+ {
+  "i": 15,
+  "kind": "upstream",
+  "label": "reads before the leader commits in its term",
+  "upstream": true,
+  "fork_tests": true,
+  "sim": true,
+  "why": "--- FAIL: TestReadOnlyForNewLeader (0.00s)",
+  "secs": 20
+ },
+ {
+  "i": 16,
+  "kind": "upstream",
+  "label": "check quorum never steps down",
+  "upstream": true,
+  "fork_tests": false,
+  "sim": false,
+  "why": "--- FAIL: TestLeaderStepdownWhenQuorumLost (0.00s) / --- FAIL: TestAddNodeCheckQuorum (0.00s) / --- FAIL: TestInteraction (0.06s)",
+  "secs": 23
+ },
+ {
+  "i": 17,
+  "kind": "upstream",
+  "label": "transfer cannot override a lease",
+  "upstream": true,
+  "fork_tests": false,
+  "sim": false,
+  "why": "--- FAIL: TestLeaderTransferWithCheckQuorum (0.00s)",
+  "secs": 19
+ },
+ {
+  "i": 18,
+  "kind": "upstream",
+  "label": "campaign with unapplied conf changes",
+  "upstream": true,
+  "fork_tests": false,
+  "sim": false,
+  "why": "--- FAIL: TestConfChangeCheckBeforeCampaign (0.00s) / --- FAIL: TestConfChangeV2CheckBeforeCampaign (0.00s)",
+  "secs": 19
+ },
+ {
+  "i": 19,
+  "kind": "upstream",
+  "label": "restore a snapshot at the commit index",
+  "upstream": false,
+  "fork_tests": false,
+  "sim": false,
+  "why": "",
+  "secs": 23
+ },
+ {
+  "i": 20,
+  "kind": "upstream",
+  "label": "truncated unstable entries stay in progress",
+  "upstream": true,
+  "fork_tests": false,
+  "sim": false,
+  "why": "--- FAIL: TestUnstableTruncateAndAppend (0.00s)",
+  "secs": 21
+ },
+ {
+  "i": 21,
+  "kind": "upstream",
+  "label": "flow control never pauses",
+  "upstream": true,
+  "fork_tests": false,
+  "sim": false,
+  "why": "--- FAIL: TestProgressPaused (0.00s) / --- FAIL: TestProgressFlowControl (0.00s) / --- FAIL: TestMsgAppRespWaitReset (0.00s)",
+  "secs": 23
+ },
+ {
+  "i": 22,
+  "kind": "upstream",
+  "label": "vote change not synced",
+  "upstream": false,
+  "fork_tests": false,
+  "sim": true,
+  "why": "--- FAIL: TestSimulation (4.95s) / sim_test.go:112: raftsim: durability: node 2 restarted in term 6 with vote 0, but had voted for 7 / sim_test.go:112: raftsim: durability: node 5 restarted in term 34",
+  "secs": 21
+ },
+ {
+  "i": 23,
+  "kind": "upstream",
+  "label": "progress update ignores probing",
+  "upstream": true,
+  "fork_tests": false,
+  "sim": false,
+  "why": "--- FAIL: TestLeaderAppResp (0.00s) / --- FAIL: TestInteraction (0.07s)",
+  "secs": 19
+ },
+ {
+  "i": 24,
+  "kind": "upstream",
+  "label": "candidate ignores lost votes",
+  "upstream": true,
+  "fork_tests": false,
+  "sim": false,
+  "why": "--- FAIL: TestLeaderElectionInOneRoundRPC (0.00s) / --- FAIL: TestLeaderElection (0.00s) / --- FAIL: TestLeaderElectionOverwriteNewerLogs (0.00s)",
+  "secs": 23
+ },
+ {
+  "i": 25,
+  "kind": "fork",
+  "label": "no commit inference from later conf changes",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestStaleConfigurationCannotElect (0.00s)",
+  "secs": 20
+ },
+ {
+  "i": 26,
+  "kind": "fork",
+  "label": "no rescue campaigns",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestRemovedLeaderRescues (0.00s)",
+  "secs": 20
+ },
+ {
+  "i": 27,
+  "kind": "fork",
+  "label": "lease without heartbeat rounds",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestLeaseNeedsRecentRound (0.00s)",
+  "secs": 23
+ },
+ {
+  "i": 28,
+  "kind": "fork",
+  "label": "no restart guard",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestLeaseStartGuard (0.00s)",
+  "secs": 24
+ },
+ {
+  "i": 29,
+  "kind": "fork",
+  "label": "removed leader steps down at once",
+  "upstream": true,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestInteraction (0.07s)",
+  "secs": 20
+ },
+ {
+  "i": 30,
+  "kind": "fork",
+  "label": "snapshot restored while applying",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestSnapshotWaitsForApplying (0.00s)",
+  "secs": 20
+ },
+ {
+  "i": 31,
+  "kind": "fork",
+  "label": "single-voter read without checking the voter",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": true,
+  "why": "--- FAIL: TestReadIndexAfterLeaderRemovedItself (0.00s)",
+  "secs": 19
+ },
+ {
+  "i": 32,
+  "kind": "fork",
+  "label": "single-voter read before a commit in its term",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": true,
+  "why": "--- FAIL: TestSingleVoterReadAfterRestart (0.00s)",
+  "secs": 19
+ },
+ {
+  "i": 33,
+  "kind": "fork",
+  "label": "lease kept after MsgTimeoutNow",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestNoLeaseReadAfterTimeoutNow (0.00s)",
+  "secs": 20
+ },
+ {
+  "i": 34,
+  "kind": "fork",
+  "label": "stale leader not answered",
+  "upstream": true,
+  "fork_tests": true,
+  "sim": true,
+  "why": "--- FAIL: TestInteraction (0.11s)",
+  "secs": 20
+ },
+ {
+  "i": 35,
+  "kind": "fork",
+  "label": "snapshot Ready not synced",
+  "upstream": true,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestInteraction (0.08s)",
+  "secs": 24
+ },
+ {
+  "i": 36,
+  "kind": "fork",
+  "label": "peer messages not validated",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestHostilePanicClasses (4.29s) / --- FAIL: TestStepValidates (0.00s) / --- FAIL: TestUndecodableConfChangeDoesNotPanicLeader (0.00s)",
+  "secs": 21
+ },
+ {
+  "i": 37,
+  "kind": "fork",
+  "label": "zero apply limit pauses for good",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": true,
+  "why": "--- FAIL: TestApplyWithZeroSizeLimits (0.00s) / panic: applying entry size 0 exceeds limit 0 [recovered, repanicked]",
+  "secs": 24
+ },
+ {
+  "i": 38,
+  "kind": "fork",
+  "label": "transfer dropped while conf changes are pending",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestDemotedLeaderHandsOff (0.00s)",
+  "secs": 23
+ },
+ {
+  "i": 39,
+  "kind": "fork",
+  "label": "no validation of conf change enums",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestHostilePanicClasses (3.78s) / --- FAIL: TestValidateMessage (0.00s) / --- FAIL: TestInvalidLocalConfChangeDropped (0.00s)",
+  "secs": 19
+ },
+ {
+  "i": 40,
+  "kind": "fork",
+  "label": "transfer forwarded with its term",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestHostilePanicClasses (5.04s) / --- FAIL: TestForwardTransferWithTerm (0.00s) / panic: term should not be set when sending MsgTransferLeader (was 3) [recovered, repanicked]",
+  "secs": 23
+ },
+ {
+  "i": 41,
+  "kind": "fork",
+  "label": "read acknowledgements of any length decoded",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestHostilePanicClasses (4.50s) / --- FAIL: TestHeartbeatAckContextChecked (0.00s) / panic: runtime error: index out of range [7] with length 1 [recovered, repanicked]",
+  "secs": 23
+ },
+ {
+  "i": 42,
+  "kind": "fork",
+  "label": "read acknowledgement beyond the reads registered accepted",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestHeartbeatAckContextChecked (0.00s)",
+  "secs": 19
+ },
+ {
+  "i": 43,
+  "kind": "upstream",
+  "label": "reads confirmed by the request's own context again",
+  "upstream": true,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestRaftFreesReadOnlyMem (0.00s) / --- FAIL: TestReadOnlyOptionSafe (0.00s) / panic: runtime error: index out of range [0] with length 0 [recovered, repanicked]",
+  "secs": 22
+ },
+ {
+  "i": 44,
+  "kind": "fork",
+  "label": "node without a term answers a rejected pre-vote",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestPreVoteRejectedWithoutTerm (0.00s) / panic: term should be set when sending MsgPreVoteResp [recovered, repanicked]",
+  "secs": 19
+ },
+ {
+  "i": 45,
+  "kind": "fork",
+  "label": "lower-term vote requests ignored again",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestCandidateLearnsHigherTerm (0.00s)",
+  "secs": 22
+ },
+ {
+  "i": 46,
+  "kind": "fork",
+  "label": "negative message types index the type tables",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestHostilePanicClasses (4.00s) / --- FAIL: TestNegativeMessageType (0.00s) / panic: runtime error: index out of range [-1] [recovered, repanicked]",
+  "secs": 22
+ },
+ {
+  "i": 47,
+  "kind": "fork",
+  "label": "negative message types pass validation",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestHostilePanicClasses (3.10s) / --- FAIL: TestValidateMessage (0.00s) / panic: runtime error: index out of range [-1] [recovered, repanicked]",
+  "secs": 19
+ },
+ {
+  "i": 48,
+  "kind": "fork",
+  "label": "nil entries from a peer accepted",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestValidateMessagePointers (0.00s)",
+  "secs": 19
+ },
+ {
+  "i": 49,
+  "kind": "fork",
+  "label": "entry types outside the enum accepted",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestValidateMessage (0.00s)",
+  "secs": 23
+ },
+ {
+  "i": 50,
+  "kind": "fork",
+  "label": "entries with unknown fields accepted",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestValidateMessagePointers (0.00s)",
+  "secs": 19
+ },
+ {
+  "i": 51,
+  "kind": "fork",
+  "label": "forwarded requests change the caller's message",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestStepLeavesForwardedRequestsAlone (0.00s)",
+  "secs": 24
+ },
+ {
+  "i": 52,
+  "kind": "fork",
+  "label": "shallow copy drops a field",
+  "upstream": false,
+  "fork_tests": true,
+  "sim": false,
+  "why": "--- FAIL: TestShallowCopyCoversEveryField (0.00s)",
+  "secs": 18
+ }
+]

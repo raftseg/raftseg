@@ -1,0 +1,522 @@
+[
+ {
+  "i": 0,
+  "label": "scanner skips chunk checksum",
+  "file": "wire.go",
+  "status": "KILLED",
+  "killed_by": "TestForgedMarkerInPayload",
+  "note": ""
+ },
+ {
+  "i": 1,
+  "label": "positioned read skips chunk checksum",
+  "file": "wire.go",
+  "status": "KILLED",
+  "killed_by": "TestDamageEveryFile",
+  "note": ""
+ },
+ {
+  "i": 2,
+  "label": "record start rule off by one",
+  "file": "format.go",
+  "status": "KILLED",
+  "killed_by": "TestWireReadsPebble",
+  "note": ""
+ },
+ {
+  "i": 3,
+  "label": "checkpoint checksum not checked",
+  "file": "checkpoint.go",
+  "status": "KILLED",
+  "killed_by": "TestDamageEveryFile",
+  "note": ""
+ },
+ {
+  "i": 4,
+  "label": "sidecar checksum not checked",
+  "file": "segindex.go",
+  "status": "KILLED",
+  "killed_by": "TestDamageEveryFile",
+  "note": ""
+ },
+ {
+  "i": 5,
+  "label": "snapshot file checksum not checked",
+  "file": "snapshot.go",
+  "status": "KILLED",
+  "killed_by": "TestDamageEveryFile",
+  "note": ""
+ },
+ {
+  "i": 6,
+  "label": "replay ignores commit sequence",
+  "file": "recover.go",
+  "status": "KILLED",
+  "killed_by": "TestSwappedSegmentsRefused",
+  "note": ""
+ },
+ {
+  "i": 7,
+  "label": "replay ignores the marker's record count",
+  "file": "recover.go",
+  "status": "KILLED",
+  "killed_by": "TestLyingMarkerRefused",
+  "note": ""
+ },
+ {
+  "i": 8,
+  "label": "damage after a vouching marker treated as torn",
+  "file": "wire.go",
+  "status": "KILLED",
+  "killed_by": "TestForgedMarkerInPayload",
+  "note": ""
+ },
+ {
+  "i": 9,
+  "label": "every damaged tail treated as torn-like",
+  "file": "wire.go",
+  "status": "KILLED",
+  "killed_by": "TestTailForensics",
+  "note": ""
+ },
+ {
+  "i": 10,
+  "label": "torn tail not zeroed",
+  "file": "recover.go",
+  "status": "KILLED",
+  "killed_by": "TestTornTailZeroed",
+  "note": ""
+ },
+ {
+  "i": 11,
+  "label": "replayed segment not synced",
+  "file": "recover.go",
+  "status": "KILLED",
+  "killed_by": "TestReplayedCommitsMadeDurable",
+  "note": ""
+ },
+ {
+  "i": 12,
+  "label": "marker claims durability it does not have",
+  "file": "log.go",
+  "status": "KILLED",
+  "killed_by": "TestPipelinedMarkerClaimsOnlySyncedData",
+  "note": ""
+ },
+ {
+  "i": 13,
+  "label": "non-newest segment may end in garbage",
+  "file": "recover.go",
+  "status": "KILLED",
+  "killed_by": "TestDamageAfterSealedSegmentsLastCommit",
+  "note": ""
+ },
+ {
+  "i": 14,
+  "label": "acknowledged before fsync",
+  "file": "log.go",
+  "status": "KILLED",
+  "killed_by": "TestChaos",
+  "note": ""
+ },
+ {
+  "i": 15,
+  "label": "roll seals without a full sync",
+  "file": "log.go",
+  "status": "EQUIVALENT",
+  "killed_by": "",
+  "note": "Equivalent: every commit is already fdatasync'd, which persists the file's size; the full fsync at a roll adds only metadata no reader needs."
+ },
+ {
+  "i": 16,
+  "label": "new segment's name not synced",
+  "file": "log.go",
+  "status": "KILLED",
+  "killed_by": "TestChaos",
+  "note": ""
+ },
+ {
+  "i": 17,
+  "label": "checkpoint file not synced before rename",
+  "file": "checkpoint.go",
+  "status": "KILLED",
+  "killed_by": "TestChaos",
+  "note": ""
+ },
+ {
+  "i": 18,
+  "label": "checkpoint rename not synced",
+  "file": "checkpoint.go",
+  "status": "KILLED",
+  "killed_by": "TestChaos",
+  "note": ""
+ },
+ {
+  "i": 19,
+  "label": "snapshot file not synced",
+  "file": "snapshot.go",
+  "status": "KILLED",
+  "killed_by": "TestChaos",
+  "note": ""
+ },
+ {
+  "i": 20,
+  "label": "snapshot file name not synced",
+  "file": "snapshot.go",
+  "status": "KILLED",
+  "killed_by": "TestChaos",
+  "note": ""
+ },
+ {
+  "i": 21,
+  "label": "GC deletes before the checkpoint",
+  "file": "gc.go",
+  "status": "KILLED",
+  "killed_by": "TestChaos",
+  "note": ""
+ },
+ {
+  "i": 22,
+  "label": "GC deletes segments with live entries",
+  "file": "gc.go",
+  "status": "KILLED",
+  "killed_by": "TestCrashCloneSequential",
+  "note": ""
+ },
+ {
+  "i": 23,
+  "label": "replaced snapshot file deleted before the new record is durable",
+  "file": "snapshot.go",
+  "status": "KILLED",
+  "killed_by": "TestAPIChaos",
+  "note": ""
+ },
+ {
+  "i": 24,
+  "label": "created snapshot's old file deleted at once",
+  "file": "snapshot.go",
+  "status": "KILLED",
+  "killed_by": "TestErrorAtAnyOp",
+  "note": ""
+ },
+ {
+  "i": 25,
+  "label": "unsynced writes kept after a failed fsync (fsyncgate)",
+  "file": "log.go",
+  "status": "KILLED",
+  "killed_by": "TestSyncLostAtEveryOp",
+  "note": ""
+ },
+ {
+  "i": 26,
+  "label": "recovered segments' names not synced",
+  "file": "recover.go",
+  "status": "KILLED",
+  "killed_by": "TestSyncLostAtEveryOp",
+  "note": ""
+ },
+ {
+  "i": 27,
+  "label": "Save not validated",
+  "file": "log.go",
+  "status": "KILLED",
+  "killed_by": "TestStorageContract",
+  "note": ""
+ },
+ {
+  "i": 28,
+  "label": "commit beyond the last entry accepted",
+  "file": "log.go",
+  "status": "KILLED",
+  "killed_by": "TestStorageContract",
+  "note": ""
+ },
+ {
+  "i": 29,
+  "label": "segment numbers need not be consecutive",
+  "file": "recover.go",
+  "status": "KILLED",
+  "killed_by": "TestStraySegmentNumbers",
+  "note": ""
+ },
+ {
+  "i": 30,
+  "label": "a roll may overwrite an existing segment",
+  "file": "log.go",
+  "status": "KILLED",
+  "killed_by": "TestRollNeverOverwrites",
+  "note": ""
+ },
+ {
+  "i": 31,
+  "label": "snapshot size trusted before allocating",
+  "file": "snapshot.go",
+  "status": "KILLED",
+  "killed_by": "TestSnapshotRefSizeNotTrusted",
+  "note": ""
+ },
+ {
+  "i": 32,
+  "label": "oversized sidecar yields no index",
+  "file": "segindex.go",
+  "status": "EQUIVALENT",
+  "killed_by": "",
+  "note": "Equivalent: an oversized sidecar now sets the error itself, so the extra nil-index check is a second guard for the same case."
+ },
+ {
+  "i": 33,
+  "label": "missing segment ignored",
+  "file": "recover.go",
+  "status": "KILLED",
+  "killed_by": "TestMissingDeadSegmentRefused",
+  "note": ""
+ },
+ {
+  "i": 34,
+  "label": "commit beyond last not checked at open",
+  "file": "recover.go",
+  "status": "KILLED",
+  "killed_by": "TestOpenRefusesCommitBeyondLast",
+  "note": ""
+ },
+ {
+  "i": 35,
+  "label": "commit below a snapshot not raised",
+  "file": "recover.go",
+  "status": "KILLED",
+  "killed_by": "TestStorageContract",
+  "note": ""
+ },
+ {
+  "i": 36,
+  "label": "orphan segments kept",
+  "file": "recover.go",
+  "status": "KILLED",
+  "killed_by": "TestSyncLostAtEveryOp",
+  "note": ""
+ },
+ {
+  "i": 37,
+  "label": "oldest checkpoint copy preferred",
+  "file": "checkpoint.go",
+  "status": "KILLED",
+  "killed_by": "TestHostileFiles",
+  "note": ""
+ },
+ {
+  "i": 38,
+  "label": "sidecar's segment number not checked",
+  "file": "segindex.go",
+  "status": "KILLED",
+  "killed_by": "TestSidecarOfLookalikeSegment",
+  "note": ""
+ },
+ {
+  "i": 39,
+  "label": "entry's group not checked on read",
+  "file": "storage.go",
+  "status": "KILLED",
+  "killed_by": "TestEntryOfAnotherGroupNotReturned",
+  "note": ""
+ },
+ {
+  "i": 40,
+  "label": "entry's term not checked on read",
+  "file": "storage.go",
+  "status": "KILLED",
+  "killed_by": "TestStaleRecordNotReturned",
+  "note": ""
+ },
+ {
+  "i": 41,
+  "label": "short read not reported as corruption",
+  "file": "wire.go",
+  "status": "KILLED",
+  "killed_by": "TestDamageEveryFile",
+  "note": ""
+ },
+ {
+  "i": 42,
+  "label": "truncated sealed segment not reported",
+  "file": "recover.go",
+  "status": "KILLED",
+  "killed_by": "TestTruncatedSealedSegmentReported",
+  "note": ""
+ },
+ {
+  "i": 43,
+  "label": "term runs truncated one too far",
+  "file": "checkpoint.go",
+  "status": "EQUIVALENT",
+  "killed_by": "",
+  "note": "Equivalent: the off-by-one keeps one extra term run starting at the truncation point, which the term appended next supersedes; term lookups return the same values."
+ },
+ {
+  "i": 44,
+  "label": "term runs compacted one too far",
+  "file": "checkpoint.go",
+  "status": "KILLED",
+  "killed_by": "TestAPIChaos",
+  "note": ""
+ },
+ {
+  "i": 45,
+  "label": "overwrite keeps the old suffix's terms",
+  "file": "log.go",
+  "status": "KILLED",
+  "killed_by": "TestUpstreamStorageAppend",
+  "note": ""
+ },
+ {
+  "i": 46,
+  "label": "size limit lets one entry too many through",
+  "file": "storage.go",
+  "status": "KILLED",
+  "killed_by": "TestUpstreamStorageEntries",
+  "note": ""
+ },
+ {
+  "i": 47,
+  "label": "Term of FirstIndex-1 off by one",
+  "file": "storage.go",
+  "status": "KILLED",
+  "killed_by": "TestAPIChaos",
+  "note": ""
+ },
+ {
+  "i": 48,
+  "label": "compaction past the commit index not raised on open",
+  "file": "recover.go",
+  "status": "KILLED",
+  "killed_by": "TestStorageContract",
+  "note": ""
+ },
+ {
+  "i": 49,
+  "label": "readers do not retry when a group changed",
+  "file": "storage.go",
+  "status": "KILLED",
+  "killed_by": "TestAPIChaos",
+  "note": ""
+ },
+ {
+  "i": 50,
+  "label": "publish does not bump the version",
+  "file": "log.go",
+  "status": "KILLED",
+  "killed_by": "every reader hangs (test timeout)",
+  "note": ""
+ },
+ {
+  "i": 51,
+  "label": "GC deletes files before marking the segment deleted",
+  "file": "gc.go",
+  "status": "KILLED",
+  "killed_by": "TestAPIChaos",
+  "note": ""
+ },
+ {
+  "i": 52,
+  "label": "Close hides the log's failure",
+  "file": "log.go",
+  "status": "KILLED",
+  "killed_by": "TestCloseReportsFailure",
+  "note": ""
+ },
+ {
+  "i": 53,
+  "label": "chunk checksums not keyed",
+  "file": "wire.go",
+  "status": "KILLED",
+  "killed_by": "TestForgedMarkerInPayload",
+  "note": ""
+ },
+ {
+  "i": 54,
+  "label": "recovered log forgets its key",
+  "file": "recover.go",
+  "status": "KILLED",
+  "killed_by": "TestSparseFilesNotRead",
+  "note": ""
+ },
+ {
+  "i": 55,
+  "label": "a removed group's record read as the live one",
+  "file": "storage.go",
+  "status": "KILLED",
+  "killed_by": "TestRemovedGroupRecordNotReturned",
+  "note": ""
+ },
+ {
+  "i": 56,
+  "label": "replay forgets where a group's first record is",
+  "file": "recover.go",
+  "status": "KILLED",
+  "killed_by": "TestCrashCloneSequential",
+  "note": ""
+ },
+ {
+  "i": 57,
+  "label": "checkpoint drops where a group's first record is",
+  "file": "checkpoint.go",
+  "status": "KILLED",
+  "killed_by": "TestSnapshotRefSizeNotTrusted",
+  "note": ""
+ },
+ {
+  "i": 58,
+  "label": "InitialState hands out the group's own messages",
+  "file": "storage.go",
+  "status": "KILLED",
+  "killed_by": "TestStorageCopiesMessages",
+  "note": ""
+ },
+ {
+  "i": 59,
+  "label": "Save keeps the caller's hard state",
+  "file": "log.go",
+  "status": "KILLED",
+  "killed_by": "TestStorageCopiesMessages",
+  "note": ""
+ },
+ {
+  "i": 60,
+  "label": "SetConfState keeps the caller's configuration",
+  "file": "storage.go",
+  "status": "KILLED",
+  "killed_by": "TestStorageCopiesMessages",
+  "note": ""
+ },
+ {
+  "i": 61,
+  "label": "Snapshot hands out the group's own metadata",
+  "file": "storage.go",
+  "status": "KILLED",
+  "killed_by": "TestStorageCopiesMessages",
+  "note": ""
+ },
+ {
+  "i": 62,
+  "label": "CreateSnapshot keeps the caller's configuration",
+  "file": "snapshot.go",
+  "status": "EQUIVALENT",
+  "killed_by": "",
+  "note": "Equivalent: the snapshot CreateSnapshot returns would share the caller's ConfState, but what seglog keeps is copied again when the snapshot is staged (newSnapInfo), so seglog's state never shares it; the returned snapshot is the caller's, as its data already is."
+ },
+ {
+  "i": 63,
+  "label": "snapshot without a configuration keeps the previous one",
+  "file": "pb.go",
+  "status": "KILLED",
+  "killed_by": "TestStorageContract",
+  "note": ""
+ },
+ {
+  "i": 64,
+  "label": "entries sized by their data, not their encoding",
+  "file": "pb.go",
+  "status": "KILLED",
+  "killed_by": "TestUpstreamStorageEntries",
+  "note": ""
+ }
+]
