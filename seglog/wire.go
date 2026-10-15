@@ -123,7 +123,8 @@ func (w *segWriter) flush() error {
 }
 
 // decodeChunks parses the chunks of one record laid out in buf, which starts
-// at absolute offset start, validating CRCs, chunk order and alignment.
+// at absolute offset start, validating CRCs, chunk order and alignment. A
+// record in one chunk is returned as part of buf, not copied.
 func decodeChunks(buf []byte, start int64, key uint32) ([]byte, error) {
 	var out []byte
 	pos, i, first := start, 0, true
@@ -149,6 +150,12 @@ func decodeChunks(buf []byte, start int64, key uint32) ([]byte, error) {
 		case !first && (typ == chunkMiddle || typ == chunkLast):
 		default:
 			return nil, fmt.Errorf("unexpected chunk type %d at %d", typ, pos)
+		}
+		if first && typ == chunkFull {
+			if chunkHeaderSize+n != len(buf) {
+				return nil, fmt.Errorf("record ends at %d, index says %d", pos+int64(chunkHeaderSize+n), start+int64(len(buf)))
+			}
+			return h[chunkHeaderSize : chunkHeaderSize+n : chunkHeaderSize+n], nil
 		}
 		out = append(out, h[chunkHeaderSize:chunkHeaderSize+n]...)
 		i += chunkHeaderSize + n

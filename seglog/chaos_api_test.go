@@ -40,8 +40,8 @@ func TestAPIChaos(t *testing.T) {
 }
 
 // entryDataOK reports whether e carries the data ents() gives its index.
-func entryDataOK(e raftpb.Entry) bool {
-	prefix := fmt.Sprintf("t%d-i%d:", e.Term, e.Index)
+func entryDataOK(e *raftpb.Entry) bool {
+	prefix := fmt.Sprintf("t%d-i%d:", e.GetTerm(), e.GetIndex())
 	if len(e.Data) < len(prefix) {
 		return bytes.Equal(e.Data, []byte(prefix)[:len(e.Data)])
 	}
@@ -49,7 +49,7 @@ func entryDataOK(e raftpb.Entry) bool {
 		return false
 	}
 	for _, c := range e.Data[len(prefix):] {
-		if c != byte(e.Index) {
+		if c != byte(e.GetIndex()) {
 			return false
 		}
 	}
@@ -168,11 +168,11 @@ func apiChaos(t *testing.T, seed int64) {
 					return
 				}
 				for k, e := range es {
-					if e.Index != lo+uint64(k) || !entryDataOK(e) {
-						fail("read entries [%d, %d): entry %d holds %d/%d %q", lo, hi, k, e.Index, e.Term, e.Data[:min(len(e.Data), 16)])
+					if e.GetIndex() != lo+uint64(k) || !entryDataOK(e) {
+						fail("read entries [%d, %d): entry %d holds %d/%d %q", lo, hi, k, e.GetIndex(), e.GetTerm(), e.Data[:min(len(e.Data), 16)])
 						return
 					}
-					if term, err := s.Term(e.Index); err == nil && term != e.Term {
+					if term, err := s.Term(e.GetIndex()); err == nil && term != e.GetTerm() {
 						// The group may have changed between the two reads; only
 						// a term that disagrees within one stable state is wrong,
 						// and the owner checks that.
@@ -208,7 +208,7 @@ func apiChaos(t *testing.T, seed int64) {
 			case 3:
 				s := l.Group(groups + 1)
 				last, _ := s.LastIndex()
-				err = s.Save(raftpb.HardState{Term: 1, Commit: last + 1}, ents(1, last+1, last+1, 100), raftpb.Snapshot{})
+				err = s.Save(&raftpb.HardState{Term: new(uint64(1)), Commit: new(last + 1)}, ents(1, last+1, last+1, 100), &raftpb.Snapshot{})
 				if errors.Is(err, ErrGroupRemoved) {
 					err = nil
 				}
@@ -245,7 +245,7 @@ func apiChaos(t *testing.T, seed int64) {
 	if _, err := s.Entries(1, 2, math.MaxUint64); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Entries after Close: %v", err)
 	}
-	if err := s.Save(raftpb.HardState{Term: 9}, nil, raftpb.Snapshot{}); !errors.Is(err, ErrClosed) {
+	if err := s.Save(&raftpb.HardState{Term: new(uint64(9))}, nil, &raftpb.Snapshot{}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Save after Close: %v", err)
 	}
 	if _, err := l.GC(); !errors.Is(err, ErrClosed) {

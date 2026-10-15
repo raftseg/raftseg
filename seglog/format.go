@@ -9,6 +9,9 @@ import (
 	"strconv"
 	"strings"
 
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/raftseg/raft/raftpb"
 )
 
@@ -70,37 +73,34 @@ func decodeRecord(b []byte) (typ byte, group uint64, payload []byte, err error) 
 }
 
 // entryHeader reads the index and term of a marshalled raftpb.Entry without
-// copying its data.
+// copying its data, as proto.Unmarshal would read them: the last varint of
+// each field wins, and other fields, unknown ones included (protobuf keeps
+// and re-encodes those), are skipped whatever their wire type.
 func entryHeader(b []byte) (index, term uint64, err error) {
 	for len(b) > 0 {
-		tag, n := binary.Uvarint(b)
-		if n <= 0 {
-			return 0, 0, fmt.Errorf("bad entry field tag")
+		num, typ, n := protowire.ConsumeTag(b)
+		if n < 0 {
+			return 0, 0, fmt.Errorf("bad entry field tag: %v", protowire.ParseError(n))
 		}
 		b = b[n:]
-		field, wire := tag>>3, tag&7
-		switch wire {
-		case 0:
-			v, n := binary.Uvarint(b)
-			if n <= 0 {
-				return 0, 0, fmt.Errorf("bad entry varint")
+		if typ == protowire.VarintType && (num == 2 || num == 3) {
+			v, n := protowire.ConsumeVarint(b)
+			if n < 0 {
+				return 0, 0, fmt.Errorf("bad entry varint: %v", protowire.ParseError(n))
 			}
 			b = b[n:]
-			switch field {
-			case 2:
+			if num == 2 {
 				term = v
-			case 3:
+			} else {
 				index = v
 			}
-		case 2:
-			l, n := binary.Uvarint(b)
-			if n <= 0 || l > uint64(len(b)-n) {
-				return 0, 0, fmt.Errorf("bad entry field length")
-			}
-			b = b[n+int(l):]
-		default:
-			return 0, 0, fmt.Errorf("unexpected entry wire type %d", wire)
+			continue
 		}
+		n = protowire.ConsumeFieldValue(num, typ, b)
+		if n < 0 {
+			return 0, 0, fmt.Errorf("bad entry field %d: %v", num, protowire.ParseError(n))
+		}
+		b = b[n:]
 	}
 	return index, term, nil
 }
@@ -162,7 +162,7 @@ const (
 // snapInfo is a group's current snapshot: metadata and inline data, or a
 // reference to the file holding the data.
 type snapInfo struct {
-	meta raftpb.SnapshotMetadata
+	meta *raftpb.SnapshotMetadata
 	data []byte   // inline data
 	ref  *snapRef // set if the data is in a file
 }
@@ -171,7 +171,7 @@ func (s *snapInfo) index() uint64 {
 	if s == nil {
 		return 0
 	}
-	return s.meta.Index
+	return s.meta.GetIndex()
 }
 
 // snapRef points at snapshot data kept in its own file.
@@ -198,8 +198,8 @@ func encodeSnapRecord(flags byte, s *snapInfo) ([]byte, error) {
 	if s.ref != nil {
 		flags |= snapExt
 	}
-	snap := raftpb.Snapshot{Metadata: s.meta, Data: s.data}
-	m, err := snap.Marshal()
+	snap := &raftpb.Snapshot{Metadata: s.meta, Data: s.data} // s.meta has every field set
+	m, err := proto.Marshal(snap)
 	if err != nil {
 		return nil, err
 	}
@@ -224,13 +224,13 @@ func decodeSnapRecord(b []byte) (flags byte, s *snapInfo, err error) {
 		}
 		s.ref, b = &ref, b[20:]
 	}
-	var snap raftpb.Snapshot
-	if err := snap.Unmarshal(b); err != nil {
+	var snap = &raftpb.Snapshot{}
+	if err := proto.Unmarshal(b, snap); err != nil {
 		return 0, nil, fmt.Errorf("%w: snapshot record: %v", ErrCorrupt, err)
 	}
-	s.meta, s.data = snap.Metadata, snap.Data
-	if s.ref != nil && (s.ref.index != s.meta.Index || len(s.data) > 0) {
-		return 0, nil, fmt.Errorf("%w: snapshot record %d refers to data of %d", ErrCorrupt, s.meta.Index, s.ref.index)
+	s.meta, s.data = copySnapshotMetadata(snap.GetMetadata()), snap.Data
+	if s.ref != nil && (s.ref.index != s.meta.GetIndex() || len(s.data) > 0) {
+		return 0, nil, fmt.Errorf("%w: snapshot record %d refers to data of %d", ErrCorrupt, s.meta.GetIndex(), s.ref.index)
 	}
 	return flags, s, nil
 }
@@ -305,8 +305,9 @@ func (p position) after(loc location) bool {
 	return loc.seg < p.seg || (loc.seg == p.seg && loc.start < p.off)
 }
 
-// seglog supports 64-bit platforms only (as does raftpb, which fails the
-// build elsewhere): offsets, sizes and counts are converted to int freely.
+// seglog supports 64-bit platforms only: offsets, sizes and counts are
+// converted to int freely. (raft itself builds on 32-bit platforms again
+// since its move to protobuf; this guard is seglog's own.)
 const _ uint = strconv.IntSize - 64
 
 // maxSegmentBytes keeps every offset in a segment within 32 bits (the entry

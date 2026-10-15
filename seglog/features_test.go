@@ -28,12 +28,12 @@ func TestCleaningFreesPinnedSegments(t *testing.T) {
 	o := Options{SegmentSize: 64 << 10, CleanAfterSegments: 2, NoAutoGC: true}
 	l := open(t, dir, o)
 	quiet := ents(1, 1, 3, 500)
-	if err := l.Save(Update{Group: 1, Entries: quiet, HardState: raftpb.HardState{Term: 1, Commit: 3}}); err != nil {
+	if err := l.Save(Update{Group: 1, Entries: quiet, HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(3))}}); err != nil {
 		t.Fatal(err)
 	}
 	s2 := l.Group(2)
 	for i := uint64(0); i < 60; i++ {
-		if err := s2.Save(raftpb.HardState{Term: 1, Commit: i*5 + 5}, ents(1, i*5+1, i*5+5, 1500), raftpb.Snapshot{}); err != nil {
+		if err := s2.Save(&raftpb.HardState{Term: new(uint64(1)), Commit: new(i*5 + 5)}, ents(1, i*5+1, i*5+5, 1500), &raftpb.Snapshot{}); err != nil {
 			t.Fatal(err)
 		}
 		if i > 2 {
@@ -75,8 +75,8 @@ func TestCleaningLargeGroupsAndLiveSegments(t *testing.T) {
 	// Group 1 keeps 6 MiB live, written interleaved with churn that is
 	// compacted away, so its old segments end up ~1/3 live.
 	for i := uint64(0); i < 300; i++ {
-		big.Save(raftpb.HardState{}, ents(1, i*2+1, i*2+2, 10<<10), raftpb.Snapshot{})
-		churn.Save(raftpb.HardState{}, ents(1, i*4+1, i*4+4, 10<<10), raftpb.Snapshot{})
+		big.Save(&raftpb.HardState{}, ents(1, i*2+1, i*2+2, 10<<10), &raftpb.Snapshot{})
+		churn.Save(&raftpb.HardState{}, ents(1, i*4+1, i*4+4, 10<<10), &raftpb.Snapshot{})
 		if i > 0 {
 			churn.Compact(i * 4)
 		}
@@ -119,8 +119,8 @@ func TestResumeNewestSegment(t *testing.T) {
 	}
 	l := open(t, dir, Options{CacheEntries: -1})
 	defer l.Close()
-	eqEntries(t, "after resumes", mustEntries(t, l.Group(1), 1, 6), func() []raftpb.Entry {
-		var all []raftpb.Entry
+	eqEntries(t, "after resumes", mustEntries(t, l.Group(1), 1, 6), func() []*raftpb.Entry {
+		var all []*raftpb.Entry
 		for i := uint64(1); i <= 5; i++ {
 			all = append(all, ents(1, i, i, 100)...)
 		}
@@ -135,7 +135,7 @@ func TestConcurrentReadsDuringSave(t *testing.T) {
 	l := open(t, t.TempDir(), Options{SegmentSize: 128 << 10, CacheEntries: 8})
 	defer l.Close()
 	s := l.Group(1)
-	if err := s.Save(raftpb.HardState{}, ents(1, 1, 20, 300), raftpb.Snapshot{}); err != nil {
+	if err := s.Save(&raftpb.HardState{}, ents(1, 1, 20, 300), &raftpb.Snapshot{}); err != nil {
 		t.Fatal(err)
 	}
 	var stop atomic.Bool
@@ -160,13 +160,13 @@ func TestConcurrentReadsDuringSave(t *testing.T) {
 					return
 				}
 				for k, e := range got {
-					want := fmt.Sprintf("t%d-i%d:", e.Term, e.Index)
-					if e.Index != fi+uint64(k) || !strings.HasPrefix(string(e.Data), want) {
-						t.Errorf("inconsistent read: entry %d is (i%d t%d) %q", fi+uint64(k), e.Index, e.Term, e.Data[:len(want)])
+					want := fmt.Sprintf("t%d-i%d:", e.GetTerm(), e.GetIndex())
+					if e.GetIndex() != fi+uint64(k) || !strings.HasPrefix(string(e.Data), want) {
+						t.Errorf("inconsistent read: entry %d is (i%d t%d) %q", fi+uint64(k), e.GetIndex(), e.GetTerm(), e.Data[:len(want)])
 						return
 					}
-					if k > 0 && e.Term < got[k-1].Term {
-						t.Errorf("terms go backwards at %d", e.Index)
+					if k > 0 && e.GetTerm() < got[k-1].GetTerm() {
+						t.Errorf("terms go backwards at %d", e.GetIndex())
 						return
 					}
 				}
@@ -187,7 +187,7 @@ func TestConcurrentReadsDuringSave(t *testing.T) {
 			start = last - 4 // overwrite a suffix with a higher term
 			term++
 		}
-		if err := s.Save(raftpb.HardState{}, ents(term, start, start+5, 300), raftpb.Snapshot{}); err != nil {
+		if err := s.Save(&raftpb.HardState{}, ents(term, start, start+5, 300), &raftpb.Snapshot{}); err != nil {
 			t.Fatal(err)
 		}
 		last = start + 5
@@ -204,7 +204,7 @@ func TestRemoveGroup(t *testing.T) {
 	dir := t.TempDir()
 	l := open(t, dir, Options{SegmentSize: 64 << 10})
 	old := l.Group(9)
-	if err := old.Save(raftpb.HardState{Term: 1, Commit: 5}, ents(1, 1, 5, 100), raftpb.Snapshot{}); err != nil {
+	if err := old.Save(&raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(5))}, ents(1, 1, 5, 100), &raftpb.Snapshot{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := l.RemoveGroup(9); err != nil {
@@ -213,7 +213,7 @@ func TestRemoveGroup(t *testing.T) {
 	if _, err := old.LastIndex(); !errors.Is(err, ErrGroupRemoved) {
 		t.Fatalf("old handle: %v", err)
 	}
-	if err := old.Save(raftpb.HardState{}, ents(1, 6, 6, 1), raftpb.Snapshot{}); !errors.Is(err, ErrGroupRemoved) {
+	if err := old.Save(&raftpb.HardState{}, ents(1, 6, 6, 1), &raftpb.Snapshot{}); !errors.Is(err, ErrGroupRemoved) {
 		t.Fatalf("old handle save: %v", err)
 	}
 	// The id can be reused from scratch.
@@ -221,7 +221,7 @@ func TestRemoveGroup(t *testing.T) {
 	if li, _ := fresh.LastIndex(); li != 0 {
 		t.Fatalf("reused id has last %d", li)
 	}
-	if err := fresh.Save(raftpb.HardState{}, ents(3, 1, 2, 10), raftpb.Snapshot{}); err != nil {
+	if err := fresh.Save(&raftpb.HardState{}, ents(3, 1, 2, 10), &raftpb.Snapshot{}); err != nil {
 		t.Fatal(err)
 	}
 	l.Close()
@@ -237,7 +237,7 @@ func TestRemoveGroup(t *testing.T) {
 func TestReadsAfterClose(t *testing.T) {
 	l := open(t, t.TempDir(), Options{CacheEntries: -1})
 	s := l.Group(1)
-	s.Save(raftpb.HardState{}, ents(1, 1, 3, 10), raftpb.Snapshot{})
+	s.Save(&raftpb.HardState{}, ents(1, 1, 3, 10), &raftpb.Snapshot{})
 	l.Close()
 	if _, err := s.Entries(1, 4, math.MaxUint64); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Entries after Close: %v", err)
@@ -248,7 +248,7 @@ func TestReadsAfterClose(t *testing.T) {
 	if err := l.Save(Update{Group: 1}); err != nil && !errors.Is(err, ErrClosed) {
 		t.Fatalf("Save after Close: %v", err)
 	}
-	if err := s.Save(raftpb.HardState{Term: 1}, nil, raftpb.Snapshot{}); !errors.Is(err, ErrClosed) {
+	if err := s.Save(&raftpb.HardState{Term: new(uint64(1))}, nil, &raftpb.Snapshot{}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Save after Close: %v", err)
 	}
 	if err := l.Close(); err != nil {
@@ -271,7 +271,7 @@ func TestScrub(t *testing.T) {
 	o := Options{SegmentSize: 64 << 10, NoAutoGC: true}
 	l := open(t, dir, o)
 	for i := uint64(0); i < 30; i++ {
-		l.Save(Update{Group: i%3 + 1, Entries: ents(1, i/3*4+1, i/3*4+4, 1200), HardState: raftpb.HardState{Term: 1}})
+		l.Save(Update{Group: i%3 + 1, Entries: ents(1, i/3*4+1, i/3*4+4, 1200), HardState: &raftpb.HardState{Term: new(uint64(1))}})
 	}
 	rep, err := l.Scrub()
 	if err != nil || len(rep.Problems) > 0 || rep.Commits != 30 || rep.IndexedEntries != 120 {
@@ -327,7 +327,7 @@ func TestFaultInjection(t *testing.T) {
 					armed.Store(true)
 				}
 				lo := uint64(i*3 + 1)
-				err := s.Save(raftpb.HardState{Term: 1, Commit: lo + 2}, ents(1, lo, lo+2, 2000), raftpb.Snapshot{})
+				err := s.Save(&raftpb.HardState{Term: new(uint64(1)), Commit: new(lo + 2)}, ents(1, lo, lo+2, 2000), &raftpb.Snapshot{})
 				if err != nil {
 					failedAt = i
 					break
@@ -338,7 +338,7 @@ func TestFaultInjection(t *testing.T) {
 				t.Fatal("injected fault never surfaced")
 			}
 			// The failure is sticky.
-			if err := s.Save(raftpb.HardState{}, ents(1, acked+1, acked+1, 1), raftpb.Snapshot{}); err == nil {
+			if err := s.Save(&raftpb.HardState{}, ents(1, acked+1, acked+1, 1), &raftpb.Snapshot{}); err == nil {
 				t.Fatal("Save succeeded after a fatal I/O error")
 			}
 			if _, err := l.GC(); err == nil {
@@ -358,7 +358,7 @@ func TestFaultInjection(t *testing.T) {
 			}
 			got := mustEntries(t, s, 1, acked+1)
 			eqEntries(t, "acked", got, ents(1, 1, acked, 2000))
-			if err := s.Save(raftpb.HardState{}, ents(1, li+1, li+1, 10), raftpb.Snapshot{}); err != nil {
+			if err := s.Save(&raftpb.HardState{}, ents(1, li+1, li+1, 10), &raftpb.Snapshot{}); err != nil {
 				t.Fatalf("save after recovery: %v", err)
 			}
 		})
@@ -433,7 +433,7 @@ func TestCleaningSkipsDecayingSegments(t *testing.T) {
 	l := open(t, t.TempDir(), Options{SegmentSize: 64 << 10, CleanAfterSegments: 2})
 	defer l.Close()
 	quiet := ents(1, 1, 3, 300)
-	if err := l.Save(Update{Group: 99, Entries: quiet, HardState: raftpb.HardState{Term: 1, Commit: 3}}); err != nil {
+	if err := l.Save(Update{Group: 99, Entries: quiet, HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(3))}}); err != nil {
 		t.Fatal(err)
 	}
 	// 8 queues keep their newest 32 entries of 512 B: 128 KiB live, the same
@@ -444,7 +444,7 @@ func TestCleaningSkipsDecayingSegments(t *testing.T) {
 	for i := 0; i < 2000; i++ {
 		g := uint64(1 + i%groups)
 		lo := next[g] + 1
-		if err := l.Group(g).Save(raftpb.HardState{Term: 1, Commit: lo + 1}, ents(1, lo, lo+1, 512), raftpb.Snapshot{}); err != nil {
+		if err := l.Group(g).Save(&raftpb.HardState{Term: new(uint64(1)), Commit: new(lo + 1)}, ents(1, lo, lo+1, 512), &raftpb.Snapshot{}); err != nil {
 			t.Fatal(err)
 		}
 		next[g] += 2

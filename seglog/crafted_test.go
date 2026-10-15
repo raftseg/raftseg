@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/raftseg/raft/raftpb"
 	"github.com/raftseg/raftseg/internal/crashfs"
 	randv2 "math/rand/v2"
@@ -68,21 +70,21 @@ func craftRecord(r *opReader) []byte {
 			payload[i] = r.byte()
 		}
 	case typ == recEntry || typ == recRelocate:
-		e := raftpb.Entry{Index: craftIndex(r), Term: craftIndex(r), Data: make([]byte, r.byte())}
-		payload, _ = e.Marshal()
+		e := &raftpb.Entry{Index: new(craftIndex(r)), Term: new(craftIndex(r)), Data: make([]byte, r.byte())}
+		payload, _ = proto.Marshal(e)
 	case typ == recHardState:
-		hs := raftpb.HardState{Term: craftIndex(r), Vote: uint64(r.byte()), Commit: craftIndex(r)}
-		payload, _ = hs.Marshal()
+		hs := &raftpb.HardState{Term: new(craftIndex(r)), Vote: new(uint64(r.byte())), Commit: new(craftIndex(r))}
+		payload, _ = proto.Marshal(hs)
 	case typ == recConfState:
-		cs := raftpb.ConfState{Voters: []uint64{uint64(r.byte())}, Learners: []uint64{uint64(r.byte())}}
-		payload, _ = cs.Marshal()
+		cs := &raftpb.ConfState{Voters: []uint64{uint64(r.byte())}, Learners: []uint64{uint64(r.byte())}}
+		payload, _ = proto.Marshal(cs)
 	case typ == recSnapshot:
-		si := &snapInfo{meta: raftpb.SnapshotMetadata{Index: craftIndex(r), Term: craftIndex(r)}}
+		si := &snapInfo{meta: &raftpb.SnapshotMetadata{Index: new(craftIndex(r)), Term: new(craftIndex(r))}}
 		if r.byte()%2 == 0 {
 			si.data = make([]byte, r.byte())
 		}
 		if r.byte()%3 == 0 {
-			si.ref = &snapRef{index: si.meta.Index, size: craftIndex(r) << (r.byte() % 40), crc: uint32(r.u16())}
+			si.ref = &snapRef{index: si.meta.GetIndex(), size: craftIndex(r) << (r.byte() % 40), crc: uint32(r.u16())}
 			si.data = nil
 			if r.byte()%4 == 0 {
 				si.ref.index = craftIndex(r)
@@ -155,7 +157,7 @@ func exercise(t *testing.T, l *Log, r *opReader) {
 			s := l.Group(id)
 			last, _ := s.LastIndex()
 			hs, _, _ := s.InitialState()
-			s.Save(raftpb.HardState{Term: hs.Term + 1, Commit: hs.Commit}, []raftpb.Entry{{Index: last + 1, Term: hs.Term + 1}}, raftpb.Snapshot{})
+			s.Save(&raftpb.HardState{Term: new(hs.GetTerm() + 1), Commit: hs.Commit}, []*raftpb.Entry{{Index: new(last + 1), Term: new(hs.GetTerm() + 1)}}, &raftpb.Snapshot{})
 			s.CreateSnapshot(last, nil, []byte("x"))
 			s.Compact(last)
 		}
@@ -203,7 +205,7 @@ func runCraftedRecords(t *testing.T, input []byte) {
 	}
 	// Some ordinary state first.
 	for g := uint64(1); g <= 3; g++ {
-		if err := l.Save(Update{Group: g, Entries: ents(1, 1, 10, 20), HardState: raftpb.HardState{Term: 1, Commit: 5}}); err != nil {
+		if err := l.Save(Update{Group: g, Entries: ents(1, 1, 10, 20), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(5))}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -300,8 +302,8 @@ func encodeCheckpointFile(c *checkpoint, version uint64) []byte {
 		w.uv(g.wmeta.compactTerm)
 		w.uv(g.born.seg)
 		w.uv(uint64(g.born.off))
-		hs, _ := g.hs.Marshal()
-		cs, _ := g.cs.Marshal()
+		hs, _ := proto.Marshal(g.hs)
+		cs, _ := proto.Marshal(g.cs)
 		w.bytes(hs)
 		w.bytes(cs)
 		if g.wsnap == nil {
@@ -395,7 +397,7 @@ func mutateCheckpoint(c *checkpoint, r *opReader) {
 				case 2:
 					g.wmeta.compactTerm = pick(g.wmeta.compactTerm)
 				case 3:
-					g.hs.Commit = pick(g.hs.Commit)
+					g.hs = withCommit(g.hs, pick(g.hs.GetCommit()))
 				case 4:
 					if len(g.runs) > 0 {
 						k := int(r.byte()) % len(g.runs)
@@ -412,13 +414,13 @@ func mutateCheckpoint(c *checkpoint, r *opReader) {
 					g.terms = append(g.terms, termRun{index: craftIndex(r), term: craftIndex(r)})
 				case 8:
 					if g.wsnap != nil {
-						g.wsnap.meta.Index = pick(g.wsnap.meta.Index)
+						g.wsnap.meta.Index = new(pick(g.wsnap.meta.GetIndex()))
 						if g.wsnap.ref != nil {
 							g.wsnap.ref.size = pick(g.wsnap.ref.size)
-							g.wsnap.ref.index = g.wsnap.meta.Index
+							g.wsnap.ref.index = g.wsnap.meta.GetIndex()
 						}
 					} else {
-						g.wsnap = &snapInfo{meta: raftpb.SnapshotMetadata{Index: craftIndex(r), Term: craftIndex(r)}, data: []byte("x")}
+						g.wsnap = &snapInfo{meta: &raftpb.SnapshotMetadata{Index: new(craftIndex(r)), Term: new(craftIndex(r))}, data: []byte("x")}
 					}
 				case 9:
 					g.runs, g.terms = nil, nil
@@ -448,7 +450,7 @@ func runCraftedCheckpoint(t *testing.T, input []byte) {
 	}
 	for i := 0; i < 30; i++ {
 		g := uint64(1 + i%3)
-		if err := l.Save(Update{Group: g, Entries: ents(1, uint64(i/3)*20+1, uint64(i/3)*20+20, 300), HardState: raftpb.HardState{Term: 1, Commit: uint64(i/3)*20 + 10}}); err != nil {
+		if err := l.Save(Update{Group: g, Entries: ents(1, uint64(i/3)*20+1, uint64(i/3)*20+20, 300), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(i/3)*20 + 10)}}); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/raftseg/raft"
 	"github.com/raftseg/raft/raftpb"
 	"github.com/raftseg/raftseg/internal/crashfs"
@@ -44,12 +46,12 @@ func TestRegressSnapshotWithoutHardState(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := l.Group(1)
-	if err := s.Save(raftpb.HardState{Term: 1, Vote: 1, Commit: 5}, ents(1, 1, 5, 10), raftpb.Snapshot{}); err != nil {
+	if err := s.Save(&raftpb.HardState{Term: new(uint64(1)), Vote: new(uint64(1)), Commit: new(uint64(5))}, ents(1, 1, 5, 10), &raftpb.Snapshot{}); err != nil {
 		t.Fatal(err)
 	}
 	armed.Store(true) // power fails before the segment fsync of this Ready
-	snap := raftpb.Snapshot{Metadata: raftpb.SnapshotMetadata{Index: 100, Term: 3, ConfState: raftpb.ConfState{Voters: []uint64{1}}}}
-	err = s.Save(raftpb.HardState{Term: 3, Commit: 100}, nil, snap)
+	snap := &raftpb.Snapshot{Metadata: &raftpb.SnapshotMetadata{Index: new(uint64(100)), Term: new(uint64(3)), ConfState: &raftpb.ConfState{Voters: []uint64{1}}}}
+	err = s.Save(&raftpb.HardState{Term: new(uint64(3)), Commit: new(uint64(100))}, nil, snap)
 	t.Logf("save: %v", err)
 	clone := mem.CrashClone(0, randv2.New(randv2.NewPCG(0, 0)))
 	l.crash()
@@ -91,7 +93,7 @@ func TestRegressSilentLossOnOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := uint64(1); i <= 5; i++ {
-		if err := l.Save(Update{Group: 1, Entries: ents(1, i, i, 50), HardState: raftpb.HardState{Term: 1, Commit: i}}); err != nil {
+		if err := l.Save(Update{Group: 1, Entries: ents(1, i, i, 50), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(i)}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -109,9 +111,9 @@ func TestRegressSilentLossOnOpen(t *testing.T) {
 		}
 		typ, _, payload, _ := decodeRecord(rec.data)
 		if typ == recEntry {
-			var e raftpb.Entry
-			e.Unmarshal(payload)
-			if e.Index == 2 {
+			var e = &raftpb.Entry{}
+			proto.Unmarshal(payload, e)
+			if e.GetIndex() == 2 {
 				target = rec.start + 30
 			}
 		}

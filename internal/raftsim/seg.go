@@ -143,15 +143,15 @@ func (s *segStorage) observe() {
 	}
 }
 
-func (s *segStorage) Save(snap pb.Snapshot, ents []pb.Entry, hs pb.HardState) error {
+func (s *segStorage) Save(snap *pb.Snapshot, ents []*pb.Entry, hs *pb.HardState) error {
 	ups := []seglog.Update{{Group: simGroup, HardState: hs, Entries: ents, Snapshot: snap}}
 	// Decoy groups write in the same group commit.
 	for g := uint64(2); g <= uint64(s.b.Groups); g++ {
 		if len(ents) == 0 {
 			break
 		}
-		e := pb.Entry{Index: s.decoy, Term: 1, Data: make([]byte, max(s.b.DecoyBytes, 64))}
-		ups = append(ups, seglog.Update{Group: simGroup + g - 1, Entries: []pb.Entry{e}, HardState: pb.HardState{Term: 1, Commit: s.decoy}})
+		e := &pb.Entry{Index: new(s.decoy), Term: new(uint64(1)), Data: make([]byte, max(s.b.DecoyBytes, 64))}
+		ups = append(ups, seglog.Update{Group: simGroup + g - 1, Entries: []*pb.Entry{e}, HardState: &pb.HardState{Term: new(uint64(1)), Commit: new(s.decoy)}})
 	}
 	if len(ups) > 1 {
 		s.decoy++

@@ -20,7 +20,7 @@ import (
 
 type envelope struct {
 	group uint64
-	msg   raftpb.Message
+	msg   *raftpb.Message
 }
 
 type stateMachine struct {
@@ -47,7 +47,7 @@ type cluster struct {
 	outbox []envelope
 }
 
-var voters = raftpb.ConfState{Voters: []uint64{1, 2, 3}}
+var voters = &raftpb.ConfState{Voters: []uint64{1, 2, 3}}
 
 func newCluster(t *testing.T, ngroups int) *cluster {
 	c := &cluster{t: t, opts: Options{SegmentSize: 64 << 10, CacheEntries: 64}}
@@ -64,7 +64,7 @@ func newCluster(t *testing.T, ngroups int) *cluster {
 		}
 		// Bootstrap every group from an initial snapshot holding the config.
 		for _, g := range c.groups {
-			snap := raftpb.Snapshot{Metadata: raftpb.SnapshotMetadata{Index: 1, Term: 1, ConfState: voters}}
+			snap := &raftpb.Snapshot{Metadata: &raftpb.SnapshotMetadata{Index: new(uint64(1)), Term: new(uint64(1)), ConfState: voters}}
 			if err := l.Save(Update{Group: g, Snapshot: snap}); err != nil {
 				t.Fatal(err)
 			}
@@ -96,7 +96,7 @@ func (c *cluster) start(n *testNode) {
 				c.t.Fatal(err)
 			}
 		}
-		sm.applied, sm.snap = snap.Metadata.Index, snap.Metadata.Index
+		sm.applied, sm.snap = snap.Metadata.GetIndex(), snap.Metadata.GetIndex()
 		rn, err := raft.NewRawNode(&raft.Config{
 			ID: n.id, ElectionTick: 10, HeartbeatTick: 1, Storage: st,
 			MaxSizePerMsg: 64 << 10, MaxInflightMsgs: 64, Applied: sm.applied,
@@ -150,17 +150,17 @@ func (c *cluster) round(tick bool) {
 				if err := json.Unmarshal(p.rd.Snapshot.Data, restored); err != nil {
 					c.t.Fatal(err)
 				}
-				sm.Values, sm.applied, sm.snap = restored.Values, p.rd.Snapshot.Metadata.Index, p.rd.Snapshot.Metadata.Index
+				sm.Values, sm.applied, sm.snap = restored.Values, p.rd.Snapshot.Metadata.GetIndex(), p.rd.Snapshot.Metadata.GetIndex()
 				n.snapsIn++
 			}
 			for _, e := range p.rd.CommittedEntries {
-				if e.Index <= sm.applied {
+				if e.GetIndex() <= sm.applied {
 					continue
 				}
-				if e.Type == raftpb.EntryNormal && len(e.Data) > 0 {
+				if e.GetType() == raftpb.EntryNormal && len(e.Data) > 0 {
 					sm.Values = append(sm.Values, string(e.Data))
 				}
-				sm.applied = e.Index
+				sm.applied = e.GetIndex()
 			}
 			for _, m := range p.rd.Messages {
 				c.outbox = append(c.outbox, envelope{p.g, m})
@@ -172,21 +172,21 @@ func (c *cluster) round(tick bool) {
 	out := c.outbox
 	c.outbox = nil
 	for _, env := range out {
-		to, from := c.nodes[env.msg.To-1], c.nodes[env.msg.From-1]
+		to, from := c.nodes[env.msg.GetTo()-1], c.nodes[env.msg.GetFrom()-1]
 		delivered := to.up
 		if delivered {
 			_ = to.rns[env.group].Step(env.msg)
 		}
 		if from.up {
-			if env.msg.Type == raftpb.MsgSnap {
+			if env.msg.GetType() == raftpb.MsgSnap {
 				status := raft.SnapshotFinish
 				if !delivered {
 					status = raft.SnapshotFailure
 				}
-				from.rns[env.group].ReportSnapshot(env.msg.To, status)
+				from.rns[env.group].ReportSnapshot(env.msg.GetTo(), status)
 			}
 			if !delivered {
-				from.rns[env.group].ReportUnreachable(env.msg.To)
+				from.rns[env.group].ReportUnreachable(env.msg.GetTo())
 			}
 		}
 	}
@@ -210,7 +210,7 @@ func (c *cluster) maybeCompact(n *testNode, g uint64) {
 	}
 	data, _ := json.Marshal(sm)
 	st := n.log.Group(g)
-	if _, err := st.CreateSnapshot(sm.applied, &voters, data); err != nil {
+	if _, err := st.CreateSnapshot(sm.applied, voters, data); err != nil {
 		c.t.Fatalf("node %d group %d snapshot: %v", n.id, g, err)
 	}
 	sm.snap = sm.applied
@@ -365,7 +365,7 @@ func TestCluster(t *testing.T) {
 	}
 	for _, n := range c.nodes {
 		for _, g := range c.groups {
-			if got := n.rns[g].Status().Commit; got == 0 {
+			if got := n.rns[g].Status().GetCommit(); got == 0 {
 				t.Fatalf("node %d group %d lost its commit index", n.id, g)
 			}
 		}

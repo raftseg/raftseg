@@ -32,38 +32,38 @@ func memOpts(fs vfs.FS, o Options) Options {
 
 // groupModel is what a group must look like after recovery.
 type groupModel struct {
-	log      map[uint64]raftpb.Entry // current content of every index <= last, compacted or not
-	termAt   map[uint64]uint64       // terms known only from snapshots
-	first    uint64                  // FirstIndex as of the last acknowledged op
-	minFirst uint64                  // FirstIndex can be no lower than this (synced snapshot apply)
+	log      map[uint64]*raftpb.Entry // current content of every index <= last, compacted or not
+	termAt   map[uint64]uint64        // terms known only from snapshots
+	first    uint64                   // FirstIndex as of the last acknowledged op
+	minFirst uint64                   // FirstIndex can be no lower than this (synced snapshot apply)
 	last     uint64
-	hs       raftpb.HardState
+	hs       *raftpb.HardState
 	snapMin  uint64 // snapshot index guaranteed durable
 	snapMax  uint64 // newest snapshot index created
 }
 
 func newGroupModel() *groupModel {
-	return &groupModel{log: map[uint64]raftpb.Entry{}, termAt: map[uint64]uint64{0: 0}, first: 1, minFirst: 1}
+	return &groupModel{log: map[uint64]*raftpb.Entry{}, termAt: map[uint64]uint64{0: 0}, first: 1, minFirst: 1}
 }
 
 func (m *groupModel) term(i uint64) uint64 {
 	if e, ok := m.log[i]; ok {
-		return e.Term
+		return e.GetTerm()
 	}
 	return m.termAt[i]
 }
 
-func (m *groupModel) append(es []raftpb.Entry) {
+func (m *groupModel) append(es []*raftpb.Entry) {
 	if len(es) == 0 {
 		return
 	}
-	for i := es[0].Index; i <= m.last; i++ {
+	for i := es[0].GetIndex(); i <= m.last; i++ {
 		delete(m.log, i)
 	}
 	for _, e := range es {
-		m.log[e.Index] = e
+		m.log[e.GetIndex()] = e
 	}
-	m.last = es[len(es)-1].Index
+	m.last = es[len(es)-1].GetIndex()
 }
 
 // checkGroup verifies a recovered group against the model. Compactions and
@@ -79,7 +79,7 @@ func checkGroup(t *testing.T, what string, s *Storage, m *groupModel) {
 	if first > m.first || first < m.minFirst {
 		t.Fatalf("%s: first %d, want in [%d, %d]", what, first, m.minFirst, m.first)
 	}
-	if hs, _, _ := s.InitialState(); hs != m.hs {
+	if hs, _, _ := s.InitialState(); !sameHS(hs, m.hs) {
 		t.Fatalf("%s: hard state %+v, want %+v", what, hs, m.hs)
 	}
 	if term, err := s.Term(first - 1); err != nil || term != m.term(first-1) {
@@ -92,8 +92,8 @@ func checkGroup(t *testing.T, what string, s *Storage, m *groupModel) {
 		}
 		for k, e := range got {
 			want := m.log[first+uint64(k)]
-			if e.Index != want.Index || e.Term != want.Term || string(e.Data) != string(want.Data) {
-				t.Fatalf("%s: entry %d: got (i%d t%d) want (i%d t%d)", what, first+uint64(k), e.Index, e.Term, want.Index, want.Term)
+			if e.GetIndex() != want.GetIndex() || e.GetTerm() != want.GetTerm() || string(e.Data) != string(want.Data) {
+				t.Fatalf("%s: entry %d: got (i%d t%d) want (i%d t%d)", what, first+uint64(k), e.GetIndex(), e.GetTerm(), want.GetIndex(), want.GetTerm())
 			}
 		}
 	}
@@ -101,7 +101,7 @@ func checkGroup(t *testing.T, what string, s *Storage, m *groupModel) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if si := snap.Metadata.Index; si < m.snapMin || si > m.snapMax {
+	if si := snap.Metadata.GetIndex(); si < m.snapMin || si > m.snapMax {
 		t.Fatalf("%s: snapshot %d, want in [%d, %d]", what, si, m.snapMin, m.snapMax)
 	}
 }
@@ -153,9 +153,9 @@ func runCrashSequential(t *testing.T, seed int64) {
 				seen[gg] = true
 				mm := models[gg]
 				start := mm.last + 1
-				if mm.last >= mm.first && mm.last > mm.hs.Commit && rng.Intn(3) == 0 {
+				if mm.last >= mm.first && mm.last > mm.hs.GetCommit() && rng.Intn(3) == 0 {
 					// overwrite an uncommitted suffix, as a new leader would
-					lo := max(mm.first, mm.hs.Commit+1)
+					lo := max(mm.first, mm.hs.GetCommit()+1)
 					start = lo + uint64(rng.Int63n(int64(mm.last-lo+1)))
 					terms[gg]++
 				}
@@ -165,11 +165,11 @@ func runCrashSequential(t *testing.T, seed int64) {
 					size = 40 << 10
 				}
 				es := ents(terms[gg], start, start+n-1, size)
-				commit := mm.hs.Commit
+				commit := mm.hs.GetCommit()
 				if c := start + n - 1 - uint64(rng.Intn(int(n))); c > commit {
 					commit = c
 				}
-				ups = append(ups, Update{Group: gg, Entries: es, HardState: raftpb.HardState{Term: terms[gg], Commit: commit}})
+				ups = append(ups, Update{Group: gg, Entries: es, HardState: &raftpb.HardState{Term: new(terms[gg]), Commit: new(commit)}})
 			}
 			if err := l.Save(ups...); err != nil {
 				t.Fatalf("step %d: %v", step, err)
@@ -178,8 +178,8 @@ func runCrashSequential(t *testing.T, seed int64) {
 				models[u.Group].append(u.Entries)
 				models[u.Group].hs = u.HardState
 			}
-		case r < 15 && m.hs.Commit >= m.first: // snapshot + compaction of applied entries
-			i := m.first + uint64(rng.Int63n(int64(m.hs.Commit-m.first+1)))
+		case r < 15 && m.hs.GetCommit() >= m.first: // snapshot + compaction of applied entries
+			i := m.first + uint64(rng.Int63n(int64(m.hs.GetCommit()-m.first+1)))
 			s := l.Group(g)
 			if i > m.snapMax {
 				if _, err := s.CreateSnapshot(i, &raftpb.ConfState{Voters: []uint64{1}}, []byte(fmt.Sprint(i))); err != nil {
@@ -197,15 +197,15 @@ func runCrashSequential(t *testing.T, seed int64) {
 		case r < 16: // a snapshot received from a leader (synced)
 			idx := max(m.last, m.snapMax) + 1 + uint64(rng.Intn(20))
 			terms[g]++
-			snap := raftpb.Snapshot{Data: []byte("remote"), Metadata: raftpb.SnapshotMetadata{Index: idx, Term: terms[g]}}
-			u := Update{Group: g, Snapshot: snap, HardState: raftpb.HardState{Term: terms[g], Commit: idx}}
+			snap := &raftpb.Snapshot{Data: []byte("remote"), Metadata: &raftpb.SnapshotMetadata{Index: new(idx), Term: new(terms[g])}}
+			u := Update{Group: g, Snapshot: snap, HardState: &raftpb.HardState{Term: new(terms[g]), Commit: new(idx)}}
 			if rng.Intn(2) == 0 {
 				u.Entries = ents(terms[g], idx+1, idx+2, 100)
 			}
 			if err := l.Save(u); err != nil {
 				t.Fatal(err)
 			}
-			m.log = map[uint64]raftpb.Entry{}
+			m.log = map[uint64]*raftpb.Entry{}
 			m.termAt[idx] = terms[g]
 			m.first, m.minFirst, m.last = idx+1, idx+1, idx
 			m.snapMin, m.snapMax = idx, idx
@@ -227,7 +227,7 @@ func runCrashSequential(t *testing.T, seed int64) {
 				checkGroup(t, fmt.Sprintf("step %d crash %d group %d", step, crashes, gg), l.Group(gg), mm)
 				mm.first, _ = l.Group(gg).FirstIndex()
 				snap, _ := l.Group(gg).Snapshot()
-				mm.snapMin, mm.snapMax = snap.Metadata.Index, snap.Metadata.Index
+				mm.snapMin, mm.snapMax = snap.Metadata.GetIndex(), snap.Metadata.GetIndex()
 			}
 			if rep, err := l.Scrub(); err != nil || len(rep.Problems) > 0 {
 				t.Fatalf("scrub after crash %d: %v %v", crashes, err, rep.Problems)
@@ -279,7 +279,7 @@ func runCrashConcurrent(t *testing.T, seed int64) {
 			}
 			n := uint64(1 + r.Intn(4))
 			history[g] = append(history[g], Update{Group: g, Entries: ents(term, start, start+n-1, 200+r.Intn(3000)),
-				HardState: raftpb.HardState{Term: term, Vote: uint64(k)}})
+				HardState: &raftpb.HardState{Term: new(term), Vote: new(uint64(k))}})
 			last = start + n - 1
 		}
 		wg.Add(1)
@@ -339,7 +339,7 @@ func runCrashConcurrent(t *testing.T, seed int64) {
 		for g := uint64(1); g <= groups; g++ {
 			s := rl.Group(g)
 			hs, _, _ := s.InitialState()
-			k := int(hs.Vote)
+			k := int(hs.GetVote())
 			if int64(k) < floors[ci][g] {
 				t.Fatalf("clone %d group %d: recovered op %d, but op %d was acknowledged", ci, g, k, floors[ci][g])
 			}
@@ -350,7 +350,7 @@ func runCrashConcurrent(t *testing.T, seed int64) {
 				m.hs = u.HardState
 			}
 			if k == 0 {
-				m.hs = raftpb.HardState{}
+				m.hs = &raftpb.HardState{}
 			}
 			m.snapMax = 0
 			checkGroup(t, fmt.Sprintf("clone %d group %d op %d", ci, g, k), s, m)

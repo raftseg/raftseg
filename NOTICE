@@ -2,18 +2,28 @@ raftseg
 Copyright 2026 The raftseg authors.
 
 This module contains code from the third-party projects below, and
-requires the first-party raft module, a fork of a third-party project.
-The third-party code is licensed under the Apache License, Version 2.0,
-whose text is kept next to it. Neither upstream project ships a NOTICE
-file of its own. Every file modified by the raftseg authors says so in its
-header.
+requires the first-party raft module, a fork of a third-party project, and
+one third-party module, google.golang.org/protobuf. The third-party code in
+this module is licensed under the Apache License, Version 2.0, whose text
+is kept next to it. Neither upstream project ships a NOTICE file of its
+own. Every file modified by the raftseg authors says so in its header.
 
 github.com/raftseg/raft  (a separate module, compiled into products)
-    raftseg requires this first-party module, a fork of etcd raft v3.6.0
-    (Apache License 2.0, copyright The etcd Authors). It carries its own
-    LICENSE and NOTICE, which products that compile it in must include;
-    its FORK.md lists every change from upstream, and upstream.json the
-    upstream release and the upstream commits cherry-picked since.
+    raftseg requires this first-party module, a fork of etcd raft
+    (go.etcd.io/raft/v3, Apache License 2.0, copyright The etcd Authors)
+    based on upstream's main branch at commit 638f427, which holds every
+    change of v3.7.0. It carries its own LICENSE and NOTICE, which
+    products that compile it in must include; its FORK.md lists every
+    change from upstream, and upstream.json the upstream commit it is based
+    on and the upstream commits cherry-picked since.
+
+google.golang.org/protobuf  (a separate module, compiled into products)
+    Google's Go protocol buffers runtime, which raft's messages are
+    generated for; required by raft and by raftseg (seglog stores raft's
+    messages with it). Copyright (c) 2018 The Go Authors; BSD 3-Clause
+    License (its LICENSE file, whose notice products that compile it in
+    must reproduce), and its PATENTS file grants additional patent rights.
+    go.sum pins its hash.
 
 seglog/  (compiled into products)
     Written by the raftseg authors. Its segment files use the record format

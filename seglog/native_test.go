@@ -14,6 +14,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/raftseg/raft"
 	"github.com/raftseg/raft/raftpb"
 	"github.com/raftseg/raftseg/internal/crashfs"
@@ -29,7 +32,7 @@ func fillLog(t *testing.T, l *Log, groups, rounds uint64, size int) {
 	for i := uint64(0); i < rounds; i++ {
 		var ups []Update
 		for g := uint64(1); g <= groups; g++ {
-			ups = append(ups, Update{Group: g, Entries: ents(1, i*4+1, i*4+4, size), HardState: raftpb.HardState{Term: 1, Commit: i*4 + 4}})
+			ups = append(ups, Update{Group: g, Entries: ents(1, i*4+1, i*4+4, size), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(i*4 + 4)}})
 		}
 		if err := l.Save(ups...); err != nil {
 			t.Fatal(err)
@@ -95,7 +98,7 @@ func TestOlderCheckpointReplays(t *testing.T) {
 	l = open(t, dir, o)
 	for i := uint64(10); i < 40; i++ {
 		for g := uint64(1); g <= 2; g++ {
-			if err := l.Group(g).Save(raftpb.HardState{Term: 1, Commit: i*4 + 4}, ents(1, i*4+1, i*4+4, 700), raftpb.Snapshot{}); err != nil {
+			if err := l.Group(g).Save(&raftpb.HardState{Term: new(uint64(1)), Commit: new(i*4 + 4)}, ents(1, i*4+1, i*4+4, 700), &raftpb.Snapshot{}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -177,7 +180,7 @@ func TestReplayAllRecordTypes(t *testing.T) {
 	l := open(t, dir, o)
 	s1, s2, s3 := l.Group(1), l.Group(2), l.Group(3)
 	for _, s := range []*Storage{s1, s2, s3} {
-		if err := s.Save(raftpb.HardState{Term: 1, Commit: 20}, ents(1, 1, 20, 300), raftpb.Snapshot{}); err != nil {
+		if err := s.Save(&raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(20))}, ents(1, 1, 20, 300), &raftpb.Snapshot{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -188,28 +191,28 @@ func TestReplayAllRecordTypes(t *testing.T) {
 	if _, err := s1.CreateSnapshot(12, nil, []byte("small")); err != nil {
 		t.Fatal(err)
 	}
-	cs := raftpb.ConfState{Voters: []uint64{1, 2, 3}, Learners: []uint64{4}}
+	cs := &raftpb.ConfState{Voters: []uint64{1, 2, 3}, Learners: []uint64{4}}
 	if err := s2.SetConfState(cs); err != nil {
 		t.Fatal(err)
 	}
 	// Truncate group 2 at 15 with a new term.
-	if err := s2.Save(raftpb.HardState{Term: 2, Vote: 3, Commit: 14}, ents(2, 15, 17, 300), raftpb.Snapshot{}); err != nil {
+	if err := s2.Save(&raftpb.HardState{Term: new(uint64(2)), Vote: new(uint64(3)), Commit: new(uint64(14))}, ents(2, 15, 17, 300), &raftpb.Snapshot{}); err != nil {
 		t.Fatal(err)
 	}
-	recv := raftpb.Snapshot{Data: big, Metadata: raftpb.SnapshotMetadata{Index: 50, Term: 3, ConfState: raftpb.ConfState{Voters: []uint64{7}}}}
-	if err := s3.Save(raftpb.HardState{Term: 3, Commit: 50}, ents(3, 51, 52, 300), recv); err != nil {
+	recv := &raftpb.Snapshot{Data: big, Metadata: &raftpb.SnapshotMetadata{Index: new(uint64(50)), Term: new(uint64(3)), ConfState: &raftpb.ConfState{Voters: []uint64{7}}}}
+	if err := s3.Save(&raftpb.HardState{Term: new(uint64(3)), Commit: new(uint64(50))}, ents(3, 51, 52, 300), recv); err != nil {
 		t.Fatal(err)
 	}
 	if err := l.RemoveGroup(1); err != nil {
 		t.Fatal(err)
 	}
 	s1 = l.Group(1) // the id is reused
-	if err := s1.Save(raftpb.HardState{Term: 9, Commit: 1}, ents(9, 1, 1, 10), raftpb.Snapshot{}); err != nil {
+	if err := s1.Save(&raftpb.HardState{Term: new(uint64(9)), Commit: new(uint64(1))}, ents(9, 1, 1, 10), &raftpb.Snapshot{}); err != nil {
 		t.Fatal(err)
 	}
 	want := map[uint64]func(*Storage){
 		1: func(s *Storage) {
-			if hs := s.HardState(); hs.Term != 9 {
+			if hs := s.HardState(); hs.GetTerm() != 9 {
 				t.Fatalf("group 1 hard state %+v", hs)
 			}
 			if snap, _ := s.Snapshot(); !raft.IsEmptySnap(snap) {
@@ -232,7 +235,7 @@ func TestReplayAllRecordTypes(t *testing.T) {
 		},
 		3: func(s *Storage) {
 			snap, err := s.Snapshot()
-			if err != nil || snap.Metadata.Index != 50 || !bytes.Equal(snap.Data, big) {
+			if err != nil || snap.Metadata.GetIndex() != 50 || !bytes.Equal(snap.Data, big) {
 				t.Fatalf("group 3 snapshot: %v %+v", err, snap.Metadata)
 			}
 			if fi, _ := s.FirstIndex(); fi != 51 {
@@ -258,9 +261,9 @@ func TestReplayAllRecordTypes(t *testing.T) {
 	}
 }
 
-func confStateEq(a, b raftpb.ConfState) bool {
-	x, _ := a.Marshal()
-	y, _ := b.Marshal()
+func confStateEq(a, b *raftpb.ConfState) bool {
+	x, _ := proto.Marshal(a)
+	y, _ := proto.Marshal(b)
 	return bytes.Equal(x, y)
 }
 
@@ -295,19 +298,47 @@ func TestDamageInCheckpointedData(t *testing.T) {
 	}
 }
 
-// entryHeader reads exactly what Unmarshal reads.
+// entryHeader reads exactly what Unmarshal reads: from entries protobuf
+// encodes, unknown fields included, and from encodings with repeated
+// fields, fields of the wrong wire type, and damage.
 func TestEntryHeader(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
-	for k := 0; k < 2000; k++ {
-		e := raftpb.Entry{Term: rng.Uint64() >> uint(rng.Intn(64)), Index: rng.Uint64() >> uint(rng.Intn(64)), Type: raftpb.EntryType(rng.Intn(3))}
+	for k := 0; k < 20000; k++ {
+		e := &raftpb.Entry{Term: new(rng.Uint64() >> uint(rng.Intn(64))), Index: new(rng.Uint64() >> uint(rng.Intn(64))), Type: raftpb.EntryType(rng.Intn(3)).Enum()}
 		if rng.Intn(4) > 0 {
 			e.Data = make([]byte, rng.Intn(300))
 			rng.Read(e.Data)
 		}
-		b, _ := e.Marshal()
+		if rng.Intn(3) == 0 {
+			e.ProtoReflect().SetUnknown(unknownFields(rng))
+		}
+		b, _ := proto.Marshal(e)
+		switch rng.Intn(4) {
+		case 0: // a field again: the last one counts
+			b = protowire.AppendTag(b, protowire.Number(2+rng.Intn(2)), protowire.VarintType)
+			b = protowire.AppendVarint(b, rng.Uint64())
+		case 1: // index or term with another wire type: an unknown field
+			b = protowire.AppendTag(b, protowire.Number(2+rng.Intn(2)), protowire.Fixed64Type)
+			b = protowire.AppendFixed64(b, rng.Uint64())
+		case 2: // damage
+			if len(b) > 0 {
+				b = b[:rng.Intn(len(b))]
+				if len(b) > 0 && rng.Intn(2) == 0 {
+					b[rng.Intn(len(b))] ^= byte(1 + rng.Intn(255))
+				}
+			}
+		}
+		var u = &raftpb.Entry{}
+		uerr := proto.Unmarshal(b, u)
 		idx, term, err := entryHeader(b)
-		if err != nil || idx != e.Index || term != e.Term {
-			t.Fatalf("%+v: got %d %d %v", e, idx, term, err)
+		if uerr != nil {
+			// entryHeader need not read all of a damaged entry; when it
+			// reads one, its index and term are those of the fields it
+			// could read, which Scrub and reads check against Unmarshal.
+			continue
+		}
+		if err != nil || idx != u.GetIndex() || term != u.GetTerm() {
+			t.Fatalf("%x: entryHeader %d %d %v, Unmarshal %d %d", b, idx, term, err, u.GetIndex(), u.GetTerm())
 		}
 	}
 }
@@ -331,9 +362,9 @@ func TestTermRuns(t *testing.T) {
 				term++
 			}
 			n := uint64(1 + rng.Intn(5))
-			var es []raftpb.Entry
+			var es []*raftpb.Entry
 			for i := from; i < from+n; i++ {
-				es = append(es, raftpb.Entry{Index: i, Term: term})
+				es = append(es, &raftpb.Entry{Index: new(i), Term: new(term)})
 				model[i] = term
 			}
 			ts = termsAppend(ts, es)
@@ -448,13 +479,13 @@ func TestSnapshotReplacementCrash(t *testing.T) {
 	}
 	receive := func(i uint64) func(*Log) error {
 		return func(l *Log) error {
-			snap := raftpb.Snapshot{Data: payload(i), Metadata: raftpb.SnapshotMetadata{Index: i, Term: 2, ConfState: raftpb.ConfState{Voters: []uint64{1}}}}
-			return l.Group(1).Save(raftpb.HardState{Term: 2, Commit: i}, nil, snap)
+			snap := &raftpb.Snapshot{Data: payload(i), Metadata: &raftpb.SnapshotMetadata{Index: new(i), Term: new(uint64(2)), ConfState: &raftpb.ConfState{Voters: []uint64{1}}}}
+			return l.Group(1).Save(&raftpb.HardState{Term: new(uint64(2)), Commit: new(i)}, nil, snap)
 		}
 	}
 	ops := []func(*Log) error{
 		func(l *Log) error {
-			return l.Group(1).Save(raftpb.HardState{Term: 1, Commit: 20}, ents(1, 1, 20, 100), raftpb.Snapshot{})
+			return l.Group(1).Save(&raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(20))}, ents(1, 1, 20, 100), &raftpb.Snapshot{})
 		},
 		create(4), create(6), receive(30), receive(32), receive(34), receive(35), receive(36),
 	}
@@ -467,7 +498,7 @@ func TestSnapshotReplacementCrash(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", what, err)
 		}
-		i := snap.Metadata.Index
+		i := snap.Metadata.GetIndex()
 		var lo uint64
 		for k := 0; k <= done; k++ {
 			if received[k] {
@@ -491,7 +522,7 @@ func TestGCCrashLeavesNoOrphans(t *testing.T) {
 	ops := []func(*Log) error{
 		func(l *Log) error {
 			for i := uint64(0); i < 40; i++ {
-				if err := l.Group(1).Save(raftpb.HardState{Term: 1, Commit: i*4 + 4}, ents(1, i*4+1, i*4+4, 1000), raftpb.Snapshot{}); err != nil {
+				if err := l.Group(1).Save(&raftpb.HardState{Term: new(uint64(1)), Commit: new(i*4 + 4)}, ents(1, i*4+1, i*4+4, 1000), &raftpb.Snapshot{}); err != nil {
 					return err
 				}
 			}

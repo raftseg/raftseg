@@ -2,37 +2,49 @@
 
 // Command sbom writes a CycloneDX 1.5 software bill of materials for the
 // raftseg module, and fails if anything other than the Go standard library,
-// the module itself and first-party modules would be compiled into a
-// product.
+// the module itself, first-party modules and the allowed third-party modules
+// would be compiled into a product.
 //
 //	go run ./internal/tools/sbom -version 0.1.0 > raftseg.cdx.json
 //
 // First-party modules are those under firstParty (github.com/raftseg/),
-// kept in their own repositories. go.mod may require only those, and each
-// must itself require nothing. They are resolved as the go command
-// resolves them: from the module cache, or from a go.work workspace. A
-// workspace copy must be a clean git checkout of exactly the version
-// go.mod requires, so that the SBOM describes what go.mod pins. A
+// kept in their own repositories. The allowed third-party modules are those
+// in thirdParty, the list internal/depcheck enforces (Google's protobuf
+// runtime, which raft's messages are generated for). go.mod may require
+// only these, may replace none of them, and a first-party module may itself
+// require only allowed third-party modules.
+//
+// Modules are resolved as the go command resolves them: from the module
+// cache, or, for a first-party module, from a go.work workspace. A module
+// from the module cache must hash to what go.sum records for it; a
+// workspace copy must be a clean git checkout of exactly the version go.mod
+// requires. Either way the SBOM describes what go.mod and go.sum pin. A
 // first-party module that is a fork records its upstream in upstream.json,
 // which becomes its components' pedigree.
 //
 // What goes into a product is found with `go list -deps` over the module's
-// non-test, non-internal-tool packages. Code used only by tests
-// (internal/datadriven, internal/testutil, internal/crashfs,
-// internal/raftsim) is listed with scope "excluded".
+// non-test, non-internal-tool packages. Each compiled package other than the
+// standard library's is a component, which depends on the components of the
+// packages it imports. Code used only by tests (internal/datadriven,
+// internal/testutil, internal/crashfs, internal/raftsim) is listed with
+// scope "excluded".
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -44,22 +56,60 @@ type pkg struct {
 	Module     *struct{ Path string }
 	Dir        string
 	GoFiles    []string
+	CgoFiles   []string
+	SFiles     []string
+	HFiles     []string
+	EmbedFiles []string
+	Imports    []string
+}
+
+// sources are the files of p that are compiled or embedded.
+func (p pkg) sources() []string {
+	var out []string
+	for _, fs := range [][]string{p.GoFiles, p.CgoFiles, p.SFiles, p.HFiles, p.EmbedFiles} {
+		out = append(out, fs...)
+	}
+	return out
 }
 
 // firstParty is the prefix of the modules maintained with this one.
 const firstParty = "github.com/raftseg/"
 
-// upstream is a fork's upstream.json: the release it was forked from and
-// the upstream commits cherry-picked since.
+// thirdPartyInfo is what the SBOM says of an allowed third-party module.
+type thirdPartyInfo struct {
+	Supplier, License, Copyright, Repository, Notes string
+}
+
+// thirdParty are the third-party modules that products may compile in: the
+// list internal/depcheck enforces.
+var thirdParty = map[string]thirdPartyInfo{
+	"google.golang.org/protobuf": {
+		Supplier:   "Google LLC",
+		License:    "BSD-3-Clause",
+		Copyright:  "Copyright (c) 2018 The Go Authors. All rights reserved.",
+		Repository: "https://github.com/protocolbuffers/protobuf-go",
+		Notes:      "Google's Go protocol buffers runtime, which raft's messages are generated for. Its PATENTS file grants additional patent rights.",
+	},
+}
+
+// upstream is a fork's upstream.json: the upstream version it was forked
+// from (a release, or the pseudo-version of the upstream commit merged
+// last) and the upstream commits cherry-picked since.
 type upstream struct {
 	Module, Version, Repository, Commit, Sum, License, Copyright, Changes string
 	CherryPicked                                                          []struct{ Commit, Subject string }
 }
 
-// firstPartyModule is a required first-party module, as resolved.
-type firstPartyModule struct {
+// requiredModule is a module go.mod requires, as resolved.
+type requiredModule struct {
 	Path, Version, Dir string
-	Upstream           *upstream
+	// Sum is the module's hash as go.sum records it.
+	Sum        string
+	FirstParty bool
+	// Upstream is a first-party fork's upstream.json.
+	Upstream *upstream
+	// Info is a third-party module's.
+	Info thirdPartyInfo
 }
 
 // Provenance of the test-only datadriven fork.
@@ -76,7 +126,7 @@ var testOnly = map[string]string{
 	"internal/testutil":   "Test assertions, used by tests only.",
 	"internal/crashfs":    "Crash-simulating filesystem, used by tests only.",
 	"internal/raftsim":    "Deterministic cluster simulator, used by tests only.",
-	"internal/depcheck":   "The zero-dependency check, a test.",
+	"internal/depcheck":   "The dependency policy check, a test.",
 	"internal/tools/sbom": "This generator.",
 }
 
@@ -90,6 +140,9 @@ func isTestOnly(rel string) bool {
 	}
 	return false
 }
+
+// pseudoVersion matches Go pseudo-versions (as golang.org/x/mod/module).
+var pseudoVersion = regexp.MustCompile(`^v[0-9]+\.(0\.0-|\d+\.\d+-([^+]*\.)?0\.)\d{14}-[A-Za-z0-9]+(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`)
 
 func main() {
 	version := flag.String("version", "0.0.0-dev", "version of the raftseg release")
@@ -127,17 +180,21 @@ func run(dir, version, timestamp string, w io.Writer) error {
 	}
 	goVersion := strings.TrimSpace(string(gov))
 
-	// The module may require first-party modules only, each requiring
-	// nothing itself.
-	fps, err := firstPartyModules(dir)
+	// The modules go.mod requires: first-party modules and allowed
+	// third-party ones, as go.mod and go.sum pin them.
+	mods, err := requiredModules(dir)
 	if err != nil {
 		return err
 	}
-	var requires []string
-	for _, m := range fps {
+	var requires, thirdPartyRequires []string
+	for _, m := range mods {
 		requires = append(requires, m.Path+"@"+m.Version)
+		if !m.FirstParty {
+			thirdPartyRequires = append(thirdPartyRequires, m.Path+"@"+m.Version)
+		}
 	}
 	sort.Strings(requires)
+	sort.Strings(thirdPartyRequires)
 
 	// Every package of the module, and what products compile in.
 	all, err := listPackages(dir, "./...")
@@ -157,21 +214,32 @@ func run(dir, version, timestamp string, w io.Writer) error {
 		return err
 	}
 	var stdPkgs []string
-	byPath := map[string]pkg{}
-	fpByPath := map[string]pkg{}
+	own := map[string]pkg{}    // the module's own packages
+	others := map[string]pkg{} // packages of required modules
 	for _, p := range deps {
 		switch {
 		case p.Standard:
 			stdPkgs = append(stdPkgs, p.ImportPath)
 		case p.Module != nil && p.Module.Path == module:
-			byPath[p.ImportPath] = p
-		case p.Module != nil && fps[p.Module.Path] != nil:
-			fpByPath[p.ImportPath] = p
+			own[p.ImportPath] = p
+		case p.Module != nil && mods[p.Module.Path] != nil:
+			others[p.ImportPath] = p
 		default:
-			return fmt.Errorf("package %s is compiled into products but is neither standard library, part of %s, nor part of a required first-party module", p.ImportPath, module)
+			return fmt.Errorf("package %s is compiled into products but is neither standard library, part of %s, nor part of a module go.mod may require", p.ImportPath, module)
 		}
-		if rel := strings.TrimPrefix(strings.TrimPrefix(p.ImportPath, module), "/"); p.Module != nil && isTestOnly(rel) {
+		if rel := strings.TrimPrefix(strings.TrimPrefix(p.ImportPath, module), "/"); p.Module != nil && p.Module.Path == module && isTestOnly(rel) {
 			return fmt.Errorf("test-only package %s is compiled into products", p.ImportPath)
+		}
+	}
+	// Every required module must be compiled in: one that is not belongs
+	// out of go.mod.
+	used := map[string]bool{}
+	for _, p := range others {
+		used[p.Module.Path] = true
+	}
+	for path := range mods {
+		if !used[path] {
+			return fmt.Errorf("go.mod requires %s, but no product compiles it in", path)
 		}
 	}
 
@@ -200,9 +268,13 @@ func run(dir, version, timestamp string, w io.Writer) error {
 		Name  string `json:"name"`
 		Value string `json:"value"`
 	}
+	type supplier struct {
+		Name string `json:"name"`
+	}
 	type component struct {
 		Type        string     `json:"type"`
 		BOMRef      string     `json:"bom-ref"`
+		Supplier    *supplier  `json:"supplier,omitempty"`
 		Name        string     `json:"name"`
 		Version     string     `json:"version,omitempty"`
 		Scope       string     `json:"scope,omitempty"`
@@ -210,24 +282,31 @@ func run(dir, version, timestamp string, w io.Writer) error {
 		Purl        string     `json:"purl,omitempty"`
 		Hashes      []hash     `json:"hashes,omitempty"`
 		Licenses    []license  `json:"licenses,omitempty"`
+		Copyright   string     `json:"copyright,omitempty"`
 		ExtRefs     []extRef   `json:"externalReferences,omitempty"`
 		Pedigree    any        `json:"pedigree,omitempty"`
 		Properties  []property `json:"properties,omitempty"`
 	}
 	apache := []license{{License: map[string]string{"id": "Apache-2.0"}}}
 	purl := func(path string) string { return fmt.Sprintf("pkg:golang/%s@%s", path, version) }
-
-	// One component per shipped package of the module, with a hash of its
-	// source files.
-	var pkgComps []component
-	var shippedPaths []string
-	for path := range byPath {
-		shippedPaths = append(shippedPaths, path)
+	std := component{
+		Type:        "library",
+		BOMRef:      "pkg:golang/std@" + goVersion,
+		Name:        "std",
+		Version:     goVersion,
+		Description: "The Go standard library (" + fmt.Sprint(len(stdPkgs)) + " packages compiled in)",
+		Purl:        "pkg:golang/std@" + goVersion,
+		Licenses:    []license{{License: map[string]string{"id": "BSD-3-Clause"}}},
+		Properties:  []property{{"go:packages", strings.Join(stdPkgs, " ")}},
 	}
-	sort.Strings(shippedPaths)
-	for _, path := range shippedPaths {
-		p := byPath[path]
-		h, err := filesHash(p.Dir, p.GoFiles)
+
+	// One component per compiled package of the module, with a hash of its
+	// source files.
+	var comps []component
+	pkgByRef := map[string]pkg{}
+	for _, path := range sortedKeys(own) {
+		p := own[path]
+		h, err := filesHash(p.Dir, p.sources())
 		if err != nil {
 			return err
 		}
@@ -239,20 +318,21 @@ func run(dir, version, timestamp string, w io.Writer) error {
 			Purl:    purl(path),
 			Hashes:  []hash{{"SHA-256", h}},
 		}
-		pkgComps = append(pkgComps, c)
+		comps = append(comps, c)
+		pkgByRef[c.BOMRef] = p
+	}
+	ownRefs := make([]string, 0, len(comps))
+	for _, c := range comps {
+		ownRefs = append(ownRefs, c.BOMRef)
 	}
 
-	// One component per compiled package of a first-party module, at the
-	// version go.mod requires, with the module's pedigree if it is a fork.
-	var fpPaths []string
-	for path := range fpByPath {
-		fpPaths = append(fpPaths, path)
-	}
-	sort.Strings(fpPaths)
-	for _, path := range fpPaths {
-		p := fpByPath[path]
-		m := fps[p.Module.Path]
-		h, err := filesHash(p.Dir, p.GoFiles)
+	// One component per compiled package of a required module, at the
+	// version go.mod requires: a first-party fork's with its pedigree, a
+	// third-party module's with its supplier, license and go.sum hash.
+	for _, path := range sortedKeys(others) {
+		p := others[path]
+		m := mods[p.Module.Path]
+		h, err := filesHash(p.Dir, p.sources())
 		if err != nil {
 			return err
 		}
@@ -270,48 +350,65 @@ func run(dir, version, timestamp string, w io.Writer) error {
 			Hashes:  []hash{{"SHA-256", h}},
 			ExtRefs: []extRef{{Type: "vcs", URL: "https://" + m.Path}},
 		}
+		if m.Sum != "" {
+			c.Properties = append(c.Properties, property{"go:module:sum", m.Sum})
+		}
+		if !m.FirstParty {
+			c.Supplier = &supplier{Name: m.Info.Supplier}
+			c.Licenses = []license{{License: map[string]string{"id": m.Info.License}}}
+			c.Copyright = m.Info.Copyright
+			c.Description = m.Info.Notes
+			c.ExtRefs = []extRef{{Type: "vcs", URL: m.Info.Repository}}
+			c.Properties = append(c.Properties, property{"raftseg:third-party", "true"})
+		}
 		if u := m.Upstream; u != nil {
 			lic := []license{{License: map[string]string{"id": u.License}}}
 			c.Licenses = lic
-			c.Description = "Fork of " + u.Module + " " + u.Version + "; every change is listed in " + u.Changes + " of " + m.Path + "."
+			// The fork's base: an upstream release, or the upstream commit
+			// merged last (named by its pseudo-version).
+			base := "upstream release " + u.Version
+			vcs := "tag " + u.Version + ", commit " + u.Commit
+			if pseudoVersion.MatchString(u.Version) {
+				base = "upstream commit " + u.Commit + " (" + u.Version + ")"
+				vcs = "commit " + u.Commit + " (pseudo-version " + u.Version + ")"
+			}
+			c.Description = "Fork of " + u.Module + " at " + base + "; every change is listed in " + u.Changes + " of " + m.Path + "."
 			uname := u.Module
 			if sub != "" {
 				uname += "/" + sub
 			}
-			commits := []map[string]string{{"uid": u.Commit, "url": u.Repository + "/commit/" + u.Commit, "message": "upstream release " + u.Version + ", the fork's base"}}
+			commits := []map[string]string{{"uid": u.Commit, "url": u.Repository + "/commit/" + u.Commit, "message": base + ", the fork's base"}}
 			for _, cp := range u.CherryPicked {
 				commits = append(commits, map[string]string{"uid": cp.Commit, "url": u.Repository + "/commit/" + cp.Commit, "message": "cherry-picked: " + cp.Subject})
+			}
+			picked := ""
+			if len(u.CherryPicked) > 0 {
+				picked = fmt.Sprintf(", with the %d upstream commits listed cherry-picked", len(u.CherryPicked))
+			}
+			ancestorRef := "pkg:golang/" + u.Module + "@" + u.Version
+			if sub != "" {
+				ancestorRef += "#" + sub
 			}
 			c.Pedigree = map[string]any{
 				"ancestors": []component{{
 					Type:     "library",
-					BOMRef:   "pkg:golang/" + u.Module + "@" + u.Version + "#" + sub,
+					BOMRef:   ancestorRef,
 					Name:     uname,
 					Version:  u.Version,
 					Purl:     "pkg:golang/" + u.Module + "@" + u.Version,
 					Licenses: lic,
-					ExtRefs:  []extRef{{Type: "vcs", URL: u.Repository, Comment: "tag " + u.Version + ", commit " + u.Commit}},
+					ExtRefs:  []extRef{{Type: "vcs", URL: u.Repository, Comment: vcs}},
 					Properties: []property{
 						{"go:module:sum", u.Sum},
 						{"copyright", u.Copyright},
 					},
 				}},
 				"commits": commits,
-				"notes":   "Fork of " + u.Module + " " + u.Version + " with the listed upstream commits cherry-picked; every change is explained in " + u.Changes + " and NOTICE of " + m.Path + ".",
+				"notes":   "Fork of " + u.Module + " at " + base + picked + "; every change is explained in " + u.Changes + " and NOTICE of " + m.Path + ".",
 			}
 		}
-		pkgComps = append(pkgComps, c)
-	}
-
-	std := component{
-		Type:        "library",
-		BOMRef:      "pkg:golang/std@" + goVersion,
-		Name:        "std",
-		Version:     goVersion,
-		Description: "The Go standard library (" + fmt.Sprint(len(stdPkgs)) + " packages compiled in)",
-		Purl:        "pkg:golang/std@" + goVersion,
-		Licenses:    []license{{License: map[string]string{"id": "BSD-3-Clause"}}},
-		Properties:  []property{{"go:packages", strings.Join(stdPkgs, " ")}},
+		comps = append(comps, c)
+		pkgByRef[c.BOMRef] = p
 	}
 
 	var excluded []component
@@ -352,25 +449,48 @@ func run(dir, version, timestamp string, w io.Writer) error {
 		BOMRef:      purl(module),
 		Name:        module,
 		Version:     version,
-		Description: "raftseg: a distributed data fabric for streams, queues and jobs on Raft. No third-party dependencies: products compile in only this module, first-party modules and the Go standard library.",
+		Description: "raftseg: a distributed data fabric for streams, queues and jobs on Raft. Products compile in only this module, first-party modules, the allowed third-party modules (" + requiresProperty(thirdPartyRequires) + ") and the Go standard library.",
 		Purl:        purl(module),
 		Hashes:      []hash{{"SHA-256", moduleHash}},
 		Properties: []property{
-			{"raftseg:third-party-modules", "0"},
+			{"raftseg:third-party-modules", fmt.Sprint(len(thirdPartyRequires))},
+			{"raftseg:third-party", requiresProperty(thirdPartyRequires)},
 			{"raftseg:go-mod-requires", requiresProperty(requires)},
 			{"raftseg:go-version", goVersion},
 		},
 	}
-	var deps2 []map[string]any
-	var compRefs []string
-	for _, c := range pkgComps {
-		compRefs = append(compRefs, c.BOMRef)
+
+	// The dependency graph: the module is its packages; each package
+	// depends on the packages it imports (the standard library as one
+	// component).
+	refByPath := map[string]string{}
+	for _, c := range comps {
+		refByPath[c.Name] = c.BOMRef
 	}
-	deps2 = append(deps2, map[string]any{"ref": root.BOMRef, "dependsOn": append(compRefs, std.BOMRef)})
-	for _, c := range pkgComps {
-		deps2 = append(deps2, map[string]any{"ref": c.BOMRef, "dependsOn": []string{std.BOMRef}})
+	stdByPath := map[string]bool{}
+	for _, p := range stdPkgs {
+		stdByPath[p] = true
 	}
-	deps2 = append(deps2, map[string]any{"ref": std.BOMRef, "dependsOn": []string{}})
+	graph := []map[string]any{{"ref": root.BOMRef, "dependsOn": ownRefs}}
+	for _, c := range comps {
+		set := map[string]bool{}
+		for _, imp := range pkgByRef[c.BOMRef].Imports {
+			switch {
+			case stdByPath[imp]:
+				set[std.BOMRef] = true
+			case refByPath[imp] != "":
+				set[refByPath[imp]] = true
+			default:
+				return fmt.Errorf("%s imports %s, which is not compiled in", c.Name, imp)
+			}
+		}
+		on := sortedKeys(set)
+		if on == nil {
+			on = []string{}
+		}
+		graph = append(graph, map[string]any{"ref": c.BOMRef, "dependsOn": on})
+	}
+	graph = append(graph, map[string]any{"ref": std.BOMRef, "dependsOn": []string{}})
 
 	bom := map[string]any{
 		"bomFormat":    "CycloneDX",
@@ -382,12 +502,21 @@ func run(dir, version, timestamp string, w io.Writer) error {
 			"tools":     map[string]any{"components": []map[string]string{{"type": "application", "name": module + "/internal/tools/sbom", "version": version}}},
 			"component": root,
 		},
-		"components":   append(append(pkgComps, std), excluded...),
-		"dependencies": deps2,
+		"components":   append(append(comps, std), excluded...),
+		"dependencies": graph,
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(bom)
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func requiresProperty(requires []string) string {
@@ -397,39 +526,97 @@ func requiresProperty(requires []string) string {
 	return strings.Join(requires, " ")
 }
 
-// firstPartyModules resolves the modules go.mod requires, which must all be
-// first-party and require nothing themselves.
-func firstPartyModules(dir string) (map[string]*firstPartyModule, error) {
-	modJSON, err := goCmd(dir, "mod", "edit", "-json")
+type goMod struct {
+	Require []struct{ Path, Version string }
+	Replace []struct{ Old struct{ Path string } }
+}
+
+func readGoMod(dir, file string) (*goMod, error) {
+	args := []string{"mod", "edit", "-json"}
+	if file != "" {
+		args = append(args, file)
+	}
+	b, err := goCmd(dir, args...)
 	if err != nil {
 		return nil, err
 	}
-	var gomod struct {
-		Require []struct{ Path, Version string }
-	}
-	if err := json.Unmarshal(modJSON, &gomod); err != nil {
+	var m goMod
+	if err := json.Unmarshal(b, &m); err != nil {
 		return nil, err
 	}
-	out := map[string]*firstPartyModule{}
-	for _, r := range gomod.Require {
-		if !strings.HasPrefix(r.Path, firstParty) {
-			return nil, fmt.Errorf("go.mod requires %s, which is not a first-party module (%s...)", r.Path, firstParty)
+	return &m, nil
+}
+
+// readGoSum returns the module hashes (not the go.mod hashes) go.sum
+// records, by "path version".
+func readGoSum(file string) (map[string]string, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]string{}, nil
 		}
-		info, err := goCmd(dir, "list", "-m", "-json", r.Path)
+		return nil, err
+	}
+	defer f.Close()
+	out := map[string]string{}
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		fields := strings.Fields(sc.Text())
+		if len(fields) != 3 || strings.HasSuffix(fields[1], "/go.mod") {
+			continue
+		}
+		out[fields[0]+" "+fields[1]] = fields[2]
+	}
+	return out, sc.Err()
+}
+
+// requiredModules resolves the modules go.mod requires. Each must be
+// first-party or an allowed third-party module, and none replaced. A module
+// from the module cache must hash to what go.sum records; a first-party
+// module from the workspace must be a clean checkout of the version
+// required. A first-party module may require only allowed third-party
+// modules.
+func requiredModules(dir string) (map[string]*requiredModule, error) {
+	gomod, err := readGoMod(dir, "")
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range gomod.Replace {
+		return nil, fmt.Errorf("go.mod replaces %s; products must compile in what go.mod requires", r.Old.Path)
+	}
+	sums, err := readGoSum(filepath.Join(dir, "go.sum"))
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]*requiredModule{}
+	for _, r := range gomod.Require {
+		first := strings.HasPrefix(r.Path, firstParty)
+		info, allowed := thirdParty[r.Path]
+		if !first && !allowed {
+			return nil, fmt.Errorf("go.mod requires %s, which is neither a first-party module (%s...) nor an allowed third-party module", r.Path, firstParty)
+		}
+		b, err := goCmd(dir, "list", "-m", "-json", r.Path)
 		if err != nil {
 			return nil, err
 		}
 		var m struct {
 			Version, Dir, GoMod string
 			Main                bool
+			Replace             *struct{ Path, Version string }
 		}
-		if err := json.Unmarshal(info, &m); err != nil {
+		if err := json.Unmarshal(b, &m); err != nil {
 			return nil, err
+		}
+		if m.Replace != nil {
+			return nil, fmt.Errorf("%s is replaced by %s %s", r.Path, m.Replace.Path, m.Replace.Version)
 		}
 		if m.Dir == "" {
 			return nil, fmt.Errorf("%s@%s is not in the module cache or the workspace", r.Path, r.Version)
 		}
+		rm := &requiredModule{Path: r.Path, Version: r.Version, Dir: m.Dir, Sum: sums[r.Path+" "+r.Version], FirstParty: first, Info: info}
 		switch {
+		case m.Main && !first:
+			return nil, fmt.Errorf("third-party module %s comes from the workspace (%s); it must come from the module cache", r.Path, m.Dir)
 		case m.Main:
 			// A workspace copy: it must be exactly the version required.
 			if err := checkCheckout(m.Dir, r.Version); err != nil {
@@ -437,32 +624,77 @@ func firstPartyModules(dir string) (map[string]*firstPartyModule, error) {
 			}
 		case m.Version != r.Version:
 			return nil, fmt.Errorf("%s resolves to %s, go.mod requires %s", r.Path, m.Version, r.Version)
-		}
-		sub, err := goCmd(dir, "mod", "edit", "-json", m.GoMod)
-		if err != nil {
-			return nil, err
-		}
-		var subMod struct{ Require []any }
-		if err := json.Unmarshal(sub, &subMod); err != nil {
-			return nil, err
-		}
-		if len(subMod.Require) != 0 {
-			return nil, fmt.Errorf("first-party module %s requires %d modules; it must require none", r.Path, len(subMod.Require))
-		}
-		fp := &firstPartyModule{Path: r.Path, Version: r.Version, Dir: m.Dir}
-		if b, err := os.ReadFile(filepath.Join(m.Dir, "upstream.json")); err == nil {
-			var u upstream
-			if err := json.Unmarshal(b, &u); err != nil {
-				return nil, fmt.Errorf("%s/upstream.json: %v", r.Path, err)
+		default:
+			if rm.Sum == "" {
+				return nil, fmt.Errorf("go.sum has no hash for %s %s", r.Path, r.Version)
 			}
-			if u.Module == "" || u.Version == "" || u.Commit == "" || u.License == "" {
-				return nil, fmt.Errorf("%s/upstream.json is incomplete", r.Path)
+			got, err := moduleSum(m.Dir, r.Path+"@"+r.Version)
+			if err != nil {
+				return nil, err
 			}
-			fp.Upstream = &u
+			if got != rm.Sum {
+				return nil, fmt.Errorf("%s@%s in the module cache (%s) hashes to %s; go.sum records %s", r.Path, r.Version, m.Dir, got, rm.Sum)
+			}
 		}
-		out[r.Path] = fp
+		if first {
+			sub, err := readGoMod(dir, m.GoMod)
+			if err != nil {
+				return nil, err
+			}
+			for _, sr := range sub.Require {
+				if _, ok := thirdParty[sr.Path]; !ok {
+					return nil, fmt.Errorf("first-party module %s requires %s, which is not an allowed third-party module", r.Path, sr.Path)
+				}
+			}
+			if b, err := os.ReadFile(filepath.Join(m.Dir, "upstream.json")); err == nil {
+				var u upstream
+				if err := json.Unmarshal(b, &u); err != nil {
+					return nil, fmt.Errorf("%s/upstream.json: %v", r.Path, err)
+				}
+				if u.Module == "" || u.Version == "" || u.Commit == "" || u.License == "" || u.Repository == "" || u.Sum == "" {
+					return nil, fmt.Errorf("%s/upstream.json is incomplete", r.Path)
+				}
+				rm.Upstream = &u
+			}
+		}
+		out[r.Path] = rm
 	}
 	return out, nil
+}
+
+// moduleSum computes the "h1:" hash go.sum records for the module
+// mv (path@version) extracted at dir, as the go command does for the
+// module cache: sha256 over "sha256(file)  mv/path" lines for every file,
+// sorted, base64-encoded.
+func moduleSum(dir, mv string) (string, error) {
+	var names []string
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		names = append(names, mv+"/"+filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	sort.Strings(names)
+	h := sha256.New()
+	for _, n := range names {
+		b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(n, mv+"/"))))
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(h, "%x  %s\n", sha256.Sum256(b), n)
+	}
+	return "h1:" + base64.StdEncoding.EncodeToString(h.Sum(nil)), nil
 }
 
 // checkCheckout checks that the git checkout at dir is clean and at the

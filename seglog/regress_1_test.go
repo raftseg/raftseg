@@ -43,7 +43,7 @@ func TestRegressSnapshotPathAcksFailedCommit(t *testing.T) {
 	}
 	defer l.Close()
 	r0 := &request{updates: []Update{{Group: 1, Entries: ents(1, 1, 3, 100)}}, done: make(chan error, 1)}
-	r1 := &request{updates: []Update{{Group: 2, Snapshot: raftpb.Snapshot{Metadata: raftpb.SnapshotMetadata{Index: 10, Term: 2}}}}, done: make(chan error, 1)}
+	r1 := &request{updates: []Update{{Group: 2, Snapshot: &raftpb.Snapshot{Metadata: &raftpb.SnapshotMetadata{Index: new(uint64(10)), Term: new(uint64(2))}}}}, done: make(chan error, 1)}
 	if err := l.exec(func() error {
 		for _, r := range []*request{r0, r1} {
 			enc, err := encodeUpdates(r.updates)

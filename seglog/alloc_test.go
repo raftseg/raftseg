@@ -31,7 +31,7 @@ func allocated(fn func()) uint64 {
 func TestSnapshotRefSizeNotTrusted(t *testing.T) {
 	mem := crashfs.New()
 	l := open(t, crashDir, memOpts(mem, Options{SnapshotInlineBytes: 16}))
-	if err := l.Save(Update{Group: 1, Entries: ents(1, 1, 5, 10), HardState: raftpb.HardState{Term: 1, Commit: 5}}); err != nil {
+	if err := l.Save(Update{Group: 1, Entries: ents(1, 1, 5, 10), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(5))}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := l.Group(1).CreateSnapshot(5, nil, make([]byte, 500)); err != nil {
@@ -65,7 +65,7 @@ func TestSparseFilesNotRead(t *testing.T) {
 		dir := t.TempDir()
 		l := open(t, dir, Options{SegmentSize: 64 << 10})
 		for i := uint64(0); i < 40; i++ {
-			if err := l.Save(Update{Group: 1, Entries: ents(1, i*10+1, i*10+10, 1000), HardState: raftpb.HardState{Term: 1, Commit: i*10 + 10}}); err != nil {
+			if err := l.Save(Update{Group: 1, Entries: ents(1, i*10+1, i*10+10, 1000), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(i*10 + 10)}}); err != nil {
 				t.Fatal(err)
 			}
 		}

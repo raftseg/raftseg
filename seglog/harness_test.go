@@ -39,7 +39,7 @@ func newWorld(groups int) *world {
 
 func (m *groupModel) clone() *groupModel {
 	c := *m
-	c.log = make(map[uint64]raftpb.Entry, len(m.log))
+	c.log = make(map[uint64]*raftpb.Entry, len(m.log))
 	for k, v := range m.log {
 		c.log[k] = v
 	}
@@ -101,7 +101,7 @@ func (o wop) String() string {
 	case opSave:
 		var parts []string
 		for _, u := range o.ups {
-			parts = append(parts, fmt.Sprintf("g%d[%d..%d]", u.Group, u.Entries[0].Index, u.Entries[len(u.Entries)-1].Index))
+			parts = append(parts, fmt.Sprintf("g%d[%d..%d]", u.Group, u.Entries[0].GetIndex(), u.Entries[len(u.Entries)-1].GetIndex()))
 		}
 		return "save " + strings.Join(parts, " ")
 	case opCreateSnapshot:
@@ -140,7 +140,7 @@ func genOp(rng *rand.Rand, w *world) wop {
 			mm := w.g[gg]
 			term := w.terms[gg]
 			start := mm.last + 1
-			lo := maxU(mm.first, mm.hs.Commit+1)
+			lo := maxU(mm.first, mm.hs.GetCommit()+1)
 			if mm.last >= lo && rng.Intn(4) == 0 {
 				start = lo + uint64(rng.Int63n(int64(mm.last-lo+1)))
 				term++
@@ -150,23 +150,23 @@ func genOp(rng *rand.Rand, w *world) wop {
 			if rng.Intn(20) == 0 {
 				size = 40 << 10
 			}
-			commit := mm.hs.Commit
+			commit := mm.hs.GetCommit()
 			if c := start + n - 1 - uint64(rng.Intn(int(n))); c > commit {
 				commit = c
 			}
-			ups = append(ups, Update{Group: gg, Entries: ents(term, start, start+n-1, size), HardState: raftpb.HardState{Term: term, Vote: 1, Commit: commit}})
+			ups = append(ups, Update{Group: gg, Entries: ents(term, start, start+n-1, size), HardState: &raftpb.HardState{Term: new(term), Vote: new(uint64(1)), Commit: new(commit)}})
 		}
 		return wop{kind: opSave, ups: ups}
-	case r < 70 && m.hs.Commit >= m.first && m.hs.Commit > m.snapMax:
+	case r < 70 && m.hs.GetCommit() >= m.first && m.hs.GetCommit() > m.snapMax:
 		lo := maxU(m.snapMax+1, m.first)
-		i := lo + uint64(rng.Int63n(int64(m.hs.Commit-lo+1)))
+		i := lo + uint64(rng.Int63n(int64(m.hs.GetCommit()-lo+1)))
 		o := wop{kind: opCreateSnapshot, group: g, idx: i}
 		if rng.Intn(2) == 0 {
 			o.cs = &raftpb.ConfState{Voters: []uint64{1, 2, 3}}
 		}
 		return o
-	case r < 80 && m.hs.Commit >= m.first:
-		return wop{kind: opCompact, group: g, idx: m.first + uint64(rng.Int63n(int64(m.hs.Commit-m.first+1)))}
+	case r < 80 && m.hs.GetCommit() >= m.first:
+		return wop{kind: opCompact, group: g, idx: m.first + uint64(rng.Int63n(int64(m.hs.GetCommit()-m.first+1)))}
 	case r < 85:
 		return wop{kind: opApplySnapshot, group: g, idx: maxU(m.last, m.snapMax) + 1 + uint64(rng.Intn(10))}
 	case r < 88:
@@ -190,14 +190,14 @@ func (o wop) run(l *Log, w *world) error {
 		return l.Group(o.group).Compact(o.idx)
 	case opApplySnapshot:
 		term := w.terms[o.group] + 1
-		u := Update{Group: o.group, HardState: raftpb.HardState{Term: term, Commit: o.idx},
-			Snapshot: raftpb.Snapshot{Data: snapPayload(o.group, o.idx), Metadata: raftpb.SnapshotMetadata{Index: o.idx, Term: term, ConfState: raftpb.ConfState{Voters: []uint64{1}}}}}
+		u := Update{Group: o.group, HardState: &raftpb.HardState{Term: new(term), Commit: new(o.idx)},
+			Snapshot: &raftpb.Snapshot{Data: snapPayload(o.group, o.idx), Metadata: &raftpb.SnapshotMetadata{Index: new(o.idx), Term: new(term), ConfState: &raftpb.ConfState{Voters: []uint64{1}}}}}
 		if o.idx%2 == 0 {
 			u.Entries = ents(term, o.idx+1, o.idx+2, 100)
 		}
 		return l.Save(u)
 	case opSetConf:
-		return l.Group(o.group).SetConfState(*o.cs)
+		return l.Group(o.group).SetConfState(o.cs)
 	case opRemove:
 		return l.RemoveGroup(o.group)
 	default:
@@ -214,7 +214,7 @@ func (o wop) apply(w *world) {
 			mm := w.g[u.Group]
 			mm.append(u.Entries)
 			mm.hs = u.HardState
-			w.terms[u.Group] = u.HardState.Term
+			w.terms[u.Group] = u.HardState.GetTerm()
 		}
 	case opCreateSnapshot:
 		m.snapMax = o.idx
@@ -226,11 +226,11 @@ func (o wop) apply(w *world) {
 	case opApplySnapshot:
 		term := w.terms[o.group] + 1
 		w.terms[o.group] = term
-		m.log = map[uint64]raftpb.Entry{}
+		m.log = map[uint64]*raftpb.Entry{}
 		m.termAt[o.idx] = term
 		m.first, m.minFirst, m.last = o.idx+1, o.idx+1, o.idx
 		m.snapMin, m.snapMax = o.idx, o.idx
-		m.hs = raftpb.HardState{Term: term, Commit: o.idx}
+		m.hs = &raftpb.HardState{Term: new(term), Commit: new(o.idx)}
 		if o.idx%2 == 0 {
 			m.append(ents(term, o.idx+1, o.idx+2, 100))
 		}
@@ -280,7 +280,7 @@ func matchGroup(s *Storage, m *groupModel) error {
 	if err != nil {
 		return err
 	}
-	if hs != m.hs {
+	if !sameHS(hs, m.hs) {
 		return fmt.Errorf("hard state %+v, want %+v", hs, m.hs)
 	}
 	if term, err := s.Term(first - 1); err != nil || term != m.term(first-1) {
@@ -293,8 +293,8 @@ func matchGroup(s *Storage, m *groupModel) error {
 		}
 		for k, e := range got {
 			want := m.log[first+uint64(k)]
-			if e.Index != want.Index || e.Term != want.Term || !bytes.Equal(e.Data, want.Data) {
-				return fmt.Errorf("entry %d: got (i%d t%d) want (i%d t%d)", first+uint64(k), e.Index, e.Term, want.Index, want.Term)
+			if e.GetIndex() != want.GetIndex() || e.GetTerm() != want.GetTerm() || !bytes.Equal(e.Data, want.Data) {
+				return fmt.Errorf("entry %d: got (i%d t%d) want (i%d t%d)", first+uint64(k), e.GetIndex(), e.GetTerm(), want.GetIndex(), want.GetTerm())
 			}
 		}
 	}
@@ -302,7 +302,7 @@ func matchGroup(s *Storage, m *groupModel) error {
 	if err != nil {
 		return fmt.Errorf("Snapshot: %v", err)
 	}
-	si := snap.Metadata.Index
+	si := snap.Metadata.GetIndex()
 	if si < m.snapMin || si > m.snapMax {
 		return fmt.Errorf("snapshot %d, want in [%d, %d]", si, m.snapMin, m.snapMax)
 	}
@@ -638,14 +638,14 @@ func logicalState(t testing.TB, l *Log, ids []uint64) string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		fmt.Fprintf(&b, "g%d [%d,%d] hs%v cs%v snap%d/%d/%x\n", id, fi, li, hs, cs.Voters, snap.Metadata.Index, snap.Metadata.Term, fnvSum(snap.Data))
+		fmt.Fprintf(&b, "g%d [%d,%d] hs%v cs%v snap%d/%d/%x\n", id, fi, li, hs, cs.Voters, snap.Metadata.GetIndex(), snap.Metadata.GetTerm(), fnvSum(snap.Data))
 		if fi <= li {
 			es, err := s.Entries(fi, li+1, math.MaxUint64)
 			if err != nil {
 				t.Fatal(err)
 			}
 			for _, e := range es {
-				fmt.Fprintf(&b, "  %d/%d/%x\n", e.Index, e.Term, fnvSum(e.Data))
+				fmt.Fprintf(&b, "  %d/%d/%x\n", e.GetIndex(), e.GetTerm(), fnvSum(e.Data))
 			}
 		}
 	}

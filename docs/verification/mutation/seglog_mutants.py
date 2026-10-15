@@ -99,8 +99,8 @@ m("Save not validated", "log.go",
   "\t\tif err := l.validate(cur.st, r.updates); err != nil {\n\t\t\tcur.add(r, err)\n\t\t\tcontinue\n\t\t}",
   "")
 m("commit beyond the last entry accepted", "log.go",
-  "if s := &sims[i]; !isEmptyHS(s.hs) && s.hs.Commit > s.meta.last {",
-  "if s := &sims[i]; false && s.hs.Commit > s.meta.last {")
+  "if s := &sims[i]; !isEmptyHS(s.hs) && s.hs.GetCommit() > s.meta.last {",
+  "if s := &sims[i]; false && s.hs.GetCommit() > s.meta.last {")
 m("segment numbers need not be consecutive", "recover.go",
   "\t\tcase n != next:\n\t\t\treturn fmt.Errorf(\"%w: segment %d is missing, but segment %d exists\", ErrCorrupt, next, n)",
   "")
@@ -117,9 +117,9 @@ m("missing segment ignored", "recover.go",
   "\t\treturn fmt.Errorf(\"%w: segment %d is missing\", ErrCorrupt, n)",
   "\t\tdelete(l.segs, n)\n\t\tcontinue")
 m("commit beyond last not checked at open", "recover.go",
-  "\t\tif g.hs.Commit > m.last {", "\t\tif false {")
+  "\t\tif g.hs.GetCommit() > m.last {", "\t\tif false {")
 m("commit below a snapshot not raised", "recover.go",
-  "\t\tif m.first > 1 && g.hs.Commit < m.first-1 && !isEmptyHS(g.hs) {",
+  "\t\tif m.first > 1 && g.hs.GetCommit() < m.first-1 && !isEmptyHS(g.hs) {",
   "\t\tif false {")
 m("orphan segments kept", "recover.go",
   "if _, ok := ck.segs[n]; !ok && n < ck.seg {", "if _, ok := ck.segs[n]; !ok && n < ck.seg && false {")
@@ -132,7 +132,7 @@ m("entry's group not checked on read", "storage.go",
   "if err != nil || (typ != recEntry && typ != recRelocate) || gid != id {",
   "if _ = gid; err != nil || (typ != recEntry && typ != recRelocate) {")
 m("entry's term not checked on read", "storage.go",
-  "\t\tif e.Term != loc.term {", "\t\tif false {")
+  "\t\tif e.GetTerm() != loc.term {", "\t\tif false {")
 m("short read not reported as corruption", "wire.go",
   "\tif errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {\n\t\treturn fmt.Errorf(\"%w: segment %d: record at %d runs past the end of the file\", ErrCorrupt, seg, at)\n\t}",
   "")
@@ -147,14 +147,14 @@ m("term runs compacted one too far", "checkpoint.go",
   "\tif out[0].index < first {\n\t\tout[0].index = first",
   "\tif out[0].index < first+1 {\n\t\tout[0].index = first + 1")
 m("overwrite keeps the old suffix's terms", "log.go",
-  "\t\tl.runsRemoveFrom(g, ents[0].Index)\n\t\tg.terms = termsTruncate(g.terms, ents[0].Index)\n\t}\n\tfor k := range ents {",
-  "\t\tl.runsRemoveFrom(g, ents[0].Index)\n\t}\n\tfor k := range ents {")
+  "\t\tl.runsRemoveFrom(g, ents[0].GetIndex())\n\t\tg.terms = termsTruncate(g.terms, ents[0].GetIndex())\n\t}\n\tfor k := range ents {",
+  "\t\tl.runsRemoveFrom(g, ents[0].GetIndex())\n\t}\n\tfor k := range ents {")
 m("size limit lets one entry too many through", "storage.go",
   "if len(*out) > 0 && *size+s > maxSize {", "if len(*out) > 0 && *size > maxSize {")
 m("Term of FirstIndex-1 off by one", "storage.go",
   "\t\tcase i == m.first-1:\n\t\t\tterm = m.compactTerm", "\t\tcase i == m.first:\n\t\t\tterm = m.compactTerm")
 m("compaction past the commit index not raised on open", "recover.go",
-  "\t\t\tg.hs.Commit = m.first - 1", "\t\t\tg.hs.Commit = m.first - 2")
+  "\t\t\tg.hs = withCommit(g.hs, m.first-1)", "\t\t\tg.hs = withCommit(g.hs, m.first-2)")
 
 # --- concurrency
 m("readers do not retry when a group changed", "storage.go",
@@ -182,3 +182,22 @@ m("replay forgets where a group's first record is", "recover.go",
   "\t\t\tg.born = position{seg, start} // as writeEntries does", "")
 m("checkpoint drops where a group's first record is", "checkpoint.go",
   "\t\tg.born = position{seg: r.uv(), off: int64(r.uv())}", "\t\tr.uv()\n\t\tr.uv()")
+
+# --- raft's messages are pointers (since raft moved to google.golang.org/protobuf): seglog keeps and hands out copies
+m("InitialState hands out the group's own messages", "storage.go",
+  "\t\ths, cs = copyHardState(g.hs), copyConfState(g.cs) // the caller's own",
+  "\t\ths, cs = g.hs, g.cs // the caller's own")
+m("Save keeps the caller's hard state", "log.go",
+  "\ths = copyHardState(hs) // the caller keeps its own\n", "\n")
+m("SetConfState keeps the caller's configuration", "storage.go",
+  "\tcs = copyConfState(cs) // the caller keeps its own\n", "\n")
+m("Snapshot hands out the group's own metadata", "storage.go",
+  "\t\tsnap.Metadata = copySnapshotMetadata(si.meta)\n", "\t\tsnap.Metadata = si.meta\n")
+m("CreateSnapshot keeps the caller's configuration", "snapshot.go",
+  "\t\t\tsnap.Metadata.ConfState = copyConfState(cs)\n", "\t\t\tsnap.Metadata.ConfState = cs\n")
+m("snapshot without a configuration keeps the previous one", "pb.go",
+  "\treturn raftpb.EnsureSnapshotMetadata(proto.Clone(md).(*raftpb.SnapshotMetadata))",
+  "\treturn proto.Clone(md).(*raftpb.SnapshotMetadata)")
+m("entries sized by their data, not their encoding", "pb.go",
+  "func entrySize(e *raftpb.Entry) int { return proto.Size(e) }",
+  "func entrySize(e *raftpb.Entry) int { return len(e.GetData()) }")

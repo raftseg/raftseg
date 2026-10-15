@@ -1,0 +1,225 @@
+// Copyright 2026 The raftseg authors. Licensed under the Apache License,
+// Version 2.0.
+
+package seglog
+
+// This program wrote testdata/v0_log.tar.gz and testdata/v0_log.json: a log
+// written by seglog as it was before raft moved to
+// google.golang.org/protobuf (raftseg 3bfbd2c, raft a954a6c, whose raftpb
+// was gogo's generated code), and what that seglog read back from it. It
+// ran as a test in a checkout of that commit:
+//
+//	SEGLOG_GEN_V0=/tmp/out go test ./seglog -run TestGenerateV0Log
+//
+// TestReadsV0Log checks that seglog reads such a log as that version did.
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"io/fs"
+	"math"
+	"math/rand"
+	"os"
+	"path/filepath"
+	"sort"
+	"testing"
+
+	"github.com/raftseg/raft/raftpb"
+)
+
+type v0Entry struct {
+	Index, Term uint64
+	Type        int32
+	Size        int    // of the encoding, as Entries returned the entry
+	Sum         string // SHA-256 of the encoding
+}
+
+type v0Group struct {
+	ID        uint64
+	HardState []byte // encoding, as InitialState returned it
+	ConfState []byte
+	First     uint64
+	Last      uint64
+	Entries   []v0Entry
+	Snapshot  struct {
+		Metadata []byte // encoding
+		DataSum  string // SHA-256
+	}
+}
+
+type v0Log struct {
+	Comment string
+	Groups  []v0Group
+	Removed []uint64
+}
+
+func TestGenerateV0Log(t *testing.T) {
+	out := os.Getenv("SEGLOG_GEN_V0")
+	if out == "" {
+		t.Skip("set SEGLOG_GEN_V0")
+	}
+	dir := filepath.Join(t.TempDir(), "log")
+	opts := Options{SegmentSize: 64 << 10, SnapshotInlineBytes: 512, CacheEntries: 16, NoPreallocate: true}
+	l, err := Open(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := rand.New(rand.NewSource(1))
+	// Data repeats a random 61-byte pattern, so that the archive
+	// compresses.
+	data := func(n int) []byte {
+		p := make([]byte, 61)
+		r.Read(p)
+		return bytes.Repeat(p, n/61+1)[:n]
+	}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	ents := func(lo, hi, term uint64) []raftpb.Entry {
+		var es []raftpb.Entry
+		for i := lo; i <= hi; i++ {
+			e := raftpb.Entry{Term: term, Index: i, Type: raftpb.EntryNormal}
+			switch {
+			case i == 1:
+				cc := raftpb.ConfChangeV2{Transition: raftpb.ConfChangeTransitionJointExplicit, Changes: []raftpb.ConfChangeSingle{
+					{Type: raftpb.ConfChangeAddNode, NodeID: 1}, {Type: raftpb.ConfChangeAddNode, NodeID: 2}, {Type: raftpb.ConfChangeAddNode, NodeID: 3}},
+					Context: []byte("ctx")}
+				e.Type, e.Data = raftpb.EntryConfChangeV2, mustMarshal(t, &cc)
+			case i == 10:
+				cc := raftpb.ConfChange{ID: 7, Type: raftpb.ConfChangeAddLearnerNode, NodeID: 4}
+				e.Type, e.Data = raftpb.EntryConfChange, mustMarshal(t, &cc)
+			case i%17 == 0:
+				e.Data = data(33000) // spans blocks and chunks
+			case i%5 == 0:
+				// no data: an empty entry, as a new leader appends
+			default:
+				e.Data = data(r.Intn(1500))
+			}
+			es = append(es, e)
+		}
+		return es
+	}
+
+	g1 := l.Group(1)
+	must(g1.Save(raftpb.HardState{Term: 1, Vote: 1}, ents(1, 50, 1), raftpb.Snapshot{}))
+	must(g1.Save(raftpb.HardState{Term: 2, Vote: 2, Commit: 40}, ents(45, 80, 2), raftpb.Snapshot{})) // overwrites 45..50
+	cs := raftpb.ConfState{Voters: []uint64{1, 2, 3}, Learners: []uint64{4}}
+	_, err = g1.CreateSnapshot(30, &cs, data(5000)) // in a file
+	must(err)
+	must(g1.Compact(30))
+	must(g1.Save(raftpb.HardState{Term: 3, Vote: 3, Commit: 80}, ents(81, 120, 3), raftpb.Snapshot{}))
+	must(g1.SetConfState(raftpb.ConfState{Voters: []uint64{1, 2, 3}, Learners: []uint64{4}, VotersOutgoing: []uint64{1, 2}, LearnersNext: []uint64{5}, AutoLeave: true}))
+
+	g2 := l.Group(2)
+	snap := raftpb.Snapshot{Data: data(100), Metadata: raftpb.SnapshotMetadata{Index: 100, Term: 4, ConfState: raftpb.ConfState{Voters: []uint64{1, 2}}}}
+	must(g2.Save(raftpb.HardState{Term: 5, Vote: 2, Commit: 100}, nil, snap)) // inline
+	must(g2.Save(raftpb.HardState{Term: 5, Vote: 2, Commit: 105}, ents(101, 110, 5), raftpb.Snapshot{}))
+
+	g7 := l.Group(7)
+	must(g7.Save(raftpb.HardState{Term: 1, Vote: 7, Commit: 2}, ents(1, 20, 1), raftpb.Snapshot{}))
+	must(l.RemoveGroup(7))
+
+	g9 := l.Group(9)
+	must(g9.Save(raftpb.HardState{Term: 6, Vote: 9}, nil, raftpb.Snapshot{}))
+
+	// Several updates in one group commit.
+	must(l.Save(
+		Update{Group: 1, HardState: raftpb.HardState{Term: 3, Vote: 3, Commit: 120}, Entries: ents(121, 125, 3)},
+		Update{Group: 2, HardState: raftpb.HardState{Term: 6, Vote: 1, Commit: 110}, Entries: ents(111, 112, 6)},
+	))
+	must(l.Close())
+
+	// What this version reads back, after a restart.
+	l, err = Open(dir, opts)
+	must(err)
+	res := v0Log{Comment: "Written by seglog at raftseg 3bfbd2c (raft a954a6c, gogo raftpb) with SegmentSize 64 KiB, SnapshotInlineBytes 512; see genv0log.go.txt.", Removed: []uint64{7}}
+	for _, id := range l.Groups() {
+		s := l.Group(id)
+		var g v0Group
+		g.ID = id
+		hs, cs, err := s.InitialState()
+		must(err)
+		g.HardState, g.ConfState = mustMarshal(t, &hs), mustMarshal(t, &cs)
+		g.First, err = s.FirstIndex()
+		must(err)
+		g.Last, err = s.LastIndex()
+		must(err)
+		if g.Last >= g.First {
+			es, err := s.Entries(g.First, g.Last+1, math.MaxUint64)
+			must(err)
+			for i := range es {
+				b := mustMarshal(t, &es[i])
+				g.Entries = append(g.Entries, v0Entry{Index: es[i].Index, Term: es[i].Term, Type: int32(es[i].Type), Size: len(b), Sum: sum(b)})
+			}
+		}
+		sn, err := s.Snapshot()
+		must(err)
+		g.Snapshot.Metadata, g.Snapshot.DataSum = mustMarshal(t, &sn.Metadata), sum(sn.Data)
+		res.Groups = append(res.Groups, g)
+	}
+	must(l.Close())
+
+	js, err := json.MarshalIndent(res, "", " ")
+	must(err)
+	must(os.WriteFile(filepath.Join(out, "v0_log.json"), append(js, '\n'), 0o644))
+	must(os.WriteFile(filepath.Join(out, "v0_log.tar.gz"), tarDir(t, dir), 0o644))
+}
+
+func sum(b []byte) string {
+	s := sha256.Sum256(b)
+	return hex.EncodeToString(s[:])
+}
+
+func mustMarshal(t *testing.T, m interface{ Marshal() ([]byte, error) }) []byte {
+	t.Helper()
+	b, err := m.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// tarDir archives the files of dir, in name order, with fixed metadata.
+func tarDir(t *testing.T, dir string) []byte {
+	var names []string
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			rel, _ := filepath.Rel(dir, p)
+			names = append(names, filepath.ToSlash(rel))
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(names)
+	var buf bytes.Buffer
+	zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	tw := tar.NewWriter(zw)
+	for _, n := range names {
+		b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(n)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: n, Mode: 0o644, Size: int64(len(b)), Typeflag: tar.TypeReg, Format: tar.FormatPAX}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}

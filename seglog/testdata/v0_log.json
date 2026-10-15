@@ -1,0 +1,795 @@
+{
+ "Comment": "Written by seglog at raftseg 3bfbd2c (raft a954a6c, gogo raftpb) with SegmentSize 64 KiB, SnapshotInlineBytes 512; see genv0log.go.txt.",
+ "Groups": [
+  {
+   "ID": 1,
+   "HardState": "CAMQAxh4",
+   "ConfState": "CAEIAggDEAQYARgCIAUoAQ==",
+   "First": 31,
+   "Last": 125,
+   "Entries": [
+    {
+     "Index": 31,
+     "Term": 1,
+     "Type": 0,
+     "Size": 304,
+     "Sum": "52c1b0b618487d7ebe4506e8ad2139811e026c2a38b9f5f65121aa5126312cd8"
+    },
+    {
+     "Index": 32,
+     "Term": 1,
+     "Type": 0,
+     "Size": 1038,
+     "Sum": "9f39e0432069ceda6448f686a6d031972181c12f2a414da085520ce79305410e"
+    },
+    {
+     "Index": 33,
+     "Term": 1,
+     "Type": 0,
+     "Size": 690,
+     "Sum": "8ff78fa582f9072ee03b763d01d5d4eaa2ee3eb46e0b620b2429464549ae4200"
+    },
+    {
+     "Index": 34,
+     "Term": 1,
+     "Type": 0,
+     "Size": 33010,
+     "Sum": "2d686c2890489337a4567999928fed283b9ae109d46890136a948add8d93e6ea"
+    },
+    {
+     "Index": 35,
+     "Term": 1,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "db59074c806daffd689df19580d582b3fc66ae07d8c5a0c3492bbb24b653fa20"
+    },
+    {
+     "Index": 36,
+     "Term": 1,
+     "Type": 0,
+     "Size": 682,
+     "Sum": "2e45eb06dca5a5edfe9abc70a86035d76c9876a449a9423b8a661d4db98984c8"
+    },
+    {
+     "Index": 37,
+     "Term": 1,
+     "Type": 0,
+     "Size": 347,
+     "Sum": "16c8d6149c0d5914a490f439dfdd9a65a7eaa328fe9770a6a4e53a4872a0850d"
+    },
+    {
+     "Index": 38,
+     "Term": 1,
+     "Type": 0,
+     "Size": 861,
+     "Sum": "a6a2b42229521b37d881a02f88495ccf0c6d57b79dba09f3de6a41d0fd64b907"
+    },
+    {
+     "Index": 39,
+     "Term": 1,
+     "Type": 0,
+     "Size": 1138,
+     "Sum": "456383bf468fa1453b021657b203c38514527b1a99bbeb768cdbf911e0a67471"
+    },
+    {
+     "Index": 40,
+     "Term": 1,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "e0c38ea69a539f438d9af95f2325e48c6170fc0ac14372f7495c14712e254c69"
+    },
+    {
+     "Index": 41,
+     "Term": 1,
+     "Type": 0,
+     "Size": 917,
+     "Sum": "ba71ea554026e36a6dbc92efccdf8930a9f6fe36e9623f02bbc3bad5e6842431"
+    },
+    {
+     "Index": 42,
+     "Term": 1,
+     "Type": 0,
+     "Size": 45,
+     "Sum": "c5fad6ff30a4217a503e0e90c5c837c352dd06221236c9415b3eeccdf98550d6"
+    },
+    {
+     "Index": 43,
+     "Term": 1,
+     "Type": 0,
+     "Size": 166,
+     "Sum": "ed3654ac256e6a8b2904767bdc53dbed6766170d1b76b743e6b6bb4544faec63"
+    },
+    {
+     "Index": 44,
+     "Term": 1,
+     "Type": 0,
+     "Size": 921,
+     "Sum": "6e489648dc64d4491200aecf33947faf5bcc53241a072c6f98999ba9aff9d5a9"
+    },
+    {
+     "Index": 45,
+     "Term": 2,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "fbb91358236b4029c6f2d6751dd1e054bdf90e5228ee743579e4a6e97a48ae13"
+    },
+    {
+     "Index": 46,
+     "Term": 2,
+     "Type": 0,
+     "Size": 505,
+     "Sum": "912efbae3638026ef1246e2e05d8a92edb80fffa75167f2d4a756e68eec83817"
+    },
+    {
+     "Index": 47,
+     "Term": 2,
+     "Type": 0,
+     "Size": 1411,
+     "Sum": "dfebd8b45a4be8778deed512f66b440a35436bbe756ba14650c60435f197041b"
+    },
+    {
+     "Index": 48,
+     "Term": 2,
+     "Type": 0,
+     "Size": 1407,
+     "Sum": "2529ab13dc2c2a9fdcb26d9c33e957c02fe0aa8d8fb532c41cb4cdd1f651cc6f"
+    },
+    {
+     "Index": 49,
+     "Term": 2,
+     "Type": 0,
+     "Size": 429,
+     "Sum": "c3a4fbf8646b45ebd3f9747388ecbf638a7a60aa463e0ba8c0e1d95181283db6"
+    },
+    {
+     "Index": 50,
+     "Term": 2,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "f05835ab2e1e272b26996786ff212244c0291aa1734af63ac8dc0153eaead57d"
+    },
+    {
+     "Index": 51,
+     "Term": 2,
+     "Type": 0,
+     "Size": 33010,
+     "Sum": "789d139185aa03584c11c98ba6606ba965ecb0c69ce695ed144dd4d49de22906"
+    },
+    {
+     "Index": 52,
+     "Term": 2,
+     "Type": 0,
+     "Size": 712,
+     "Sum": "5be28136c7cb310dc7ba9782dd26a878d0bebdd85dcb13021e3a7b2458312dfa"
+    },
+    {
+     "Index": 53,
+     "Term": 2,
+     "Type": 0,
+     "Size": 1316,
+     "Sum": "ea0312296b8d4fd8c21273e684d3c9038d338680bce456877b8a3fea787d6119"
+    },
+    {
+     "Index": 54,
+     "Term": 2,
+     "Type": 0,
+     "Size": 542,
+     "Sum": "10577960a1ac106e604102ac71d562b13a50be4ad3f488a5f962b91396ab9d08"
+    },
+    {
+     "Index": 55,
+     "Term": 2,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "f6c487d92d76015e45f4977982e14d09229eece4c614b28f253ffba5e367e134"
+    },
+    {
+     "Index": 56,
+     "Term": 2,
+     "Type": 0,
+     "Size": 654,
+     "Sum": "6bfdb6a85a45918d7725f921be583557502b073ca2e25a4c30f9c5ba1f06be2d"
+    },
+    {
+     "Index": 57,
+     "Term": 2,
+     "Type": 0,
+     "Size": 519,
+     "Sum": "05fcfcb6b3a3984fd40a676e23afc8d09b574fd286d5c609c0c3b2c4ce999bb2"
+    },
+    {
+     "Index": 58,
+     "Term": 2,
+     "Type": 0,
+     "Size": 649,
+     "Sum": "1a67dab99ad16fc213e6155ed547a221a8aeb03b85c876352b798c007f2fd95e"
+    },
+    {
+     "Index": 59,
+     "Term": 2,
+     "Type": 0,
+     "Size": 1334,
+     "Sum": "7f055c081ff6a42d7c4d210c09bcb942977d0be64e93379cb76707ef69dfb256"
+    },
+    {
+     "Index": 60,
+     "Term": 2,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "dc20cc875bc1dd6cb5f363cfe544247c322a518e065e951123e547912c0b4ae2"
+    },
+    {
+     "Index": 61,
+     "Term": 2,
+     "Type": 0,
+     "Size": 535,
+     "Sum": "5a2d4a6b14808248a995bf62b57e1267c80eca4e27bca552a626fcf93b488d76"
+    },
+    {
+     "Index": 62,
+     "Term": 2,
+     "Type": 0,
+     "Size": 1175,
+     "Sum": "e6727821131389cfc7287f5555348e6af0332b2ba663df78987194cfcd6cbb06"
+    },
+    {
+     "Index": 63,
+     "Term": 2,
+     "Type": 0,
+     "Size": 210,
+     "Sum": "94d08ec62e7516fbdafa081f33a6b0df5eb5c98c936e4c6e745b06d52c315c86"
+    },
+    {
+     "Index": 64,
+     "Term": 2,
+     "Type": 0,
+     "Size": 1322,
+     "Sum": "a4b46d3becffaf2abafc15d6aff64f27c94d2762e7f906e1fd54785cad03dacd"
+    },
+    {
+     "Index": 65,
+     "Term": 2,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "5c19384949bb49b54937bcf900b1e7bd742e0381b9e1325d05f3715373501ee7"
+    },
+    {
+     "Index": 66,
+     "Term": 2,
+     "Type": 0,
+     "Size": 1188,
+     "Sum": "7d231cfd36ec8a47e1dfe9050998c44180659a0da27a4ba266b2cfcf52360bf9"
+    },
+    {
+     "Index": 67,
+     "Term": 2,
+     "Type": 0,
+     "Size": 1156,
+     "Sum": "2add8256e8db63811cd412c1634c373243cc54c7c6a703105c2a872818558748"
+    },
+    {
+     "Index": 68,
+     "Term": 2,
+     "Type": 0,
+     "Size": 33010,
+     "Sum": "400c773b29fbcf8316f7dc7d804576288588bb558aa0a06c1a2e7631e7685c8c"
+    },
+    {
+     "Index": 69,
+     "Term": 2,
+     "Type": 0,
+     "Size": 230,
+     "Sum": "0dfa901a24e6c78f18a177d22c928d84299b81ef2fec5d9002ae710d8710b7e8"
+    },
+    {
+     "Index": 70,
+     "Term": 2,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "4dd031bae48fb054dd5c3676bb084272ed491437a644975f11574785a7e667af"
+    },
+    {
+     "Index": 71,
+     "Term": 2,
+     "Type": 0,
+     "Size": 324,
+     "Sum": "4e381ca161ad2986027a5d0ec1ca0f48f96e34a195010be90961d4cf9a0daa78"
+    },
+    {
+     "Index": 72,
+     "Term": 2,
+     "Type": 0,
+     "Size": 1204,
+     "Sum": "98884e9a8d13d7166f1e1e953a4e4ab788ff1fdcd913062f8f53a85304efcbf8"
+    },
+    {
+     "Index": 73,
+     "Term": 2,
+     "Type": 0,
+     "Size": 426,
+     "Sum": "c8da3a41c0a581debf511ca738b02cccd672e459f43471df0c24f065071f9935"
+    },
+    {
+     "Index": 74,
+     "Term": 2,
+     "Type": 0,
+     "Size": 1277,
+     "Sum": "085a82a074f6a5fcdda562797dd5e6a67c2eb10e1398d231ef7a6995c6018ce0"
+    },
+    {
+     "Index": 75,
+     "Term": 2,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "dd0eb8b440bde9ddcfe7b52a41b23c648e6f71e514b884ecf86edd658898d090"
+    },
+    {
+     "Index": 76,
+     "Term": 2,
+     "Type": 0,
+     "Size": 446,
+     "Sum": "a02cc29587a3c31c980868b846f1fe50b16f6ea995f6aa734ed6366a3327bd19"
+    },
+    {
+     "Index": 77,
+     "Term": 2,
+     "Type": 0,
+     "Size": 1244,
+     "Sum": "5132715199bd736a4446c616e5ff8dcfa5c7a441e0abd72d7afffea731b578af"
+    },
+    {
+     "Index": 78,
+     "Term": 2,
+     "Type": 0,
+     "Size": 1170,
+     "Sum": "6ba73896fc1bc3b2fd9c931ae301789e63b269b3e24c3aee140de76f6dc20719"
+    },
+    {
+     "Index": 79,
+     "Term": 2,
+     "Type": 0,
+     "Size": 48,
+     "Sum": "2dbadfd864e1ecc2efbfe6d944889fc2b85ca796ccf82dc03e1f522a66ba512a"
+    },
+    {
+     "Index": 80,
+     "Term": 2,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "7575da77c8c7ffe8dee3859fc8ee657b9053812187002517d659ff90e775b14d"
+    },
+    {
+     "Index": 81,
+     "Term": 3,
+     "Type": 0,
+     "Size": 101,
+     "Sum": "bbd2bf81cddfb76e9e136e1db31ad4aa0bedb4aa9b72601043776b68fa2d84d3"
+    },
+    {
+     "Index": 82,
+     "Term": 3,
+     "Type": 0,
+     "Size": 826,
+     "Sum": "b3ecab9c00ee168cba207c85d5d5243ca4422b5a796696bcb8a7a76cdb12e845"
+    },
+    {
+     "Index": 83,
+     "Term": 3,
+     "Type": 0,
+     "Size": 139,
+     "Sum": "f3707e0e0cdce7885ed705401bc13af25aff7c2d10289857bc4ec07b8f0e1ecd"
+    },
+    {
+     "Index": 84,
+     "Term": 3,
+     "Type": 0,
+     "Size": 1210,
+     "Sum": "5f88ed7a5f105d503df7c7c9485a95ea77f016c887d36c8623e90fe420950967"
+    },
+    {
+     "Index": 85,
+     "Term": 3,
+     "Type": 0,
+     "Size": 33010,
+     "Sum": "7d93e4f3917f4dd42751c223c3e3ceca20d9d83d44bcb22e9672463293212d6d"
+    },
+    {
+     "Index": 86,
+     "Term": 3,
+     "Type": 0,
+     "Size": 114,
+     "Sum": "32cd379d409a794a90c10fcd30f04c8e99bb8b3d9f2d470c2ebf0f6d2f3051d7"
+    },
+    {
+     "Index": 87,
+     "Term": 3,
+     "Type": 0,
+     "Size": 464,
+     "Sum": "753036c3a6f3843383fedd5c15d919705ddc51e5a77263dca6dd5eb64a6072cb"
+    },
+    {
+     "Index": 88,
+     "Term": 3,
+     "Type": 0,
+     "Size": 652,
+     "Sum": "2182f0ba0986fe8c24c7bfb14f7184f00c966e2bc9a3de119b73925dcd1537ad"
+    },
+    {
+     "Index": 89,
+     "Term": 3,
+     "Type": 0,
+     "Size": 356,
+     "Sum": "b9bc2dae40653c3e60618250edadc944009e6bd18206fecddc7861840a9f8ff9"
+    },
+    {
+     "Index": 90,
+     "Term": 3,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "a8375393ffe1f8548c1c84a6f60aecd79400c8217e218b18383e374da5fda61a"
+    },
+    {
+     "Index": 91,
+     "Term": 3,
+     "Type": 0,
+     "Size": 746,
+     "Sum": "719f562bd850994256dd320178f8a2a48e2cb883bd2510e3630f0d6717ab244f"
+    },
+    {
+     "Index": 92,
+     "Term": 3,
+     "Type": 0,
+     "Size": 71,
+     "Sum": "e7d1ff7c160e58cf8d50d0698ade6e78314387d44c688b9ce1310c943fcea48d"
+    },
+    {
+     "Index": 93,
+     "Term": 3,
+     "Type": 0,
+     "Size": 1180,
+     "Sum": "629ea28bdcfc0d2d34b5f44e804b08aefb590b10fe84d16f536d5d081228cc3f"
+    },
+    {
+     "Index": 94,
+     "Term": 3,
+     "Type": 0,
+     "Size": 31,
+     "Sum": "a386a09e8e7b12ad6d9d6c20a1a03e399878744e896fbfa798d43fba260ea590"
+    },
+    {
+     "Index": 95,
+     "Term": 3,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "f2a5a7bc06afc32246a32e7ca14b27cc21557f3d52698cebb39eed270d247a26"
+    },
+    {
+     "Index": 96,
+     "Term": 3,
+     "Type": 0,
+     "Size": 504,
+     "Sum": "363faf8bef7541576e8be689283f2105f08f8fa6c33a8bbf7875d1afa553bb6c"
+    },
+    {
+     "Index": 97,
+     "Term": 3,
+     "Type": 0,
+     "Size": 298,
+     "Sum": "9c96f0c82c50290d93f7c846b6dffab92b44796dae60c9cb0e6d9c145f9142c7"
+    },
+    {
+     "Index": 98,
+     "Term": 3,
+     "Type": 0,
+     "Size": 872,
+     "Sum": "afb713344a865083ce03bcce264835569525026990a7091cc5ac8578c11cfa5a"
+    },
+    {
+     "Index": 99,
+     "Term": 3,
+     "Type": 0,
+     "Size": 973,
+     "Sum": "0d6846819e6dc6ced3ae8f76aee5f5e7543bdfbc305bcb6c595dc92d4ade11b3"
+    },
+    {
+     "Index": 100,
+     "Term": 3,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "35654ff86cb77aff3bcf926b3c854d3bd42698e55833ee489d74715af9003836"
+    },
+    {
+     "Index": 101,
+     "Term": 3,
+     "Type": 0,
+     "Size": 1253,
+     "Sum": "9b7a6d49dd0d7a9571fdf083324d005b2b1eaf512ff2b3cea26f27b126284a23"
+    },
+    {
+     "Index": 102,
+     "Term": 3,
+     "Type": 0,
+     "Size": 33010,
+     "Sum": "ab1451f2c286efd7c5dfd28cb401b752a60b212281e37a09b8f3427b1d302a5d"
+    },
+    {
+     "Index": 103,
+     "Term": 3,
+     "Type": 0,
+     "Size": 44,
+     "Sum": "c92e96b11895d1b50cd4e1ebd796095b6e96e9111fbff4980a456e9be896514f"
+    },
+    {
+     "Index": 104,
+     "Term": 3,
+     "Type": 0,
+     "Size": 810,
+     "Sum": "d4bcc065122008db62f09e55fcad2640854b9e6f3546e4585c145e221ae9815b"
+    },
+    {
+     "Index": 105,
+     "Term": 3,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "b3dfdf3affe63f510cb27df8356f7957b089410005916bc65afbc29489222f57"
+    },
+    {
+     "Index": 106,
+     "Term": 3,
+     "Type": 0,
+     "Size": 286,
+     "Sum": "f86c46ec994752ca88168570f84ee68e8ee05cd90b233d9e76f6224d6876da06"
+    },
+    {
+     "Index": 107,
+     "Term": 3,
+     "Type": 0,
+     "Size": 159,
+     "Sum": "52d9de65ccab6216047cf3c28cc9dd13ae110fe29f654bc322a1592c7c479d19"
+    },
+    {
+     "Index": 108,
+     "Term": 3,
+     "Type": 0,
+     "Size": 912,
+     "Sum": "856cd2993f09f7c9bf658f4cad8353810ffb5cabbb381dddc29a0cfaeb8a396c"
+    },
+    {
+     "Index": 109,
+     "Term": 3,
+     "Type": 0,
+     "Size": 113,
+     "Sum": "4a7209a3b266c54b4d2eabe511d2bd7ec59c2cfaf5cd5e4a61ee4c73cd6dcc71"
+    },
+    {
+     "Index": 110,
+     "Term": 3,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "522a57d4afaa26fa16a1a602821821c8b858f433eb700c3e2f5106f4ba9a5458"
+    },
+    {
+     "Index": 111,
+     "Term": 3,
+     "Type": 0,
+     "Size": 712,
+     "Sum": "fdd5ede492cba748ebb3ba40ee2e73bd749e66876795f2a2cde45406d08ec69c"
+    },
+    {
+     "Index": 112,
+     "Term": 3,
+     "Type": 0,
+     "Size": 981,
+     "Sum": "be7e25db12c9cf6d1a4f399853a9a520f8dad6b0854b57badd78d0d4770fa8cf"
+    },
+    {
+     "Index": 113,
+     "Term": 3,
+     "Type": 0,
+     "Size": 159,
+     "Sum": "13222b0cbc313277c71f3e8529cf804779634452050b2ff3f9c707f610524d7b"
+    },
+    {
+     "Index": 114,
+     "Term": 3,
+     "Type": 0,
+     "Size": 1180,
+     "Sum": "65ebe9b7f69cb2632d4157a7bd95af07046b3b942f1747bc5e7e33b29b256e2d"
+    },
+    {
+     "Index": 115,
+     "Term": 3,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "514446d83880c704e5db30336afae08ef0bb6056cf9cef63af48b6146ad3c71a"
+    },
+    {
+     "Index": 116,
+     "Term": 3,
+     "Type": 0,
+     "Size": 992,
+     "Sum": "5103e82931cd61c12969770df14a6d68dd2a835d16e5e13789ae64b76e86d23b"
+    },
+    {
+     "Index": 117,
+     "Term": 3,
+     "Type": 0,
+     "Size": 1363,
+     "Sum": "05720b3cfd2681409971709b8226c404a37af6861add4bd3b3e9d5b57fd3824c"
+    },
+    {
+     "Index": 118,
+     "Term": 3,
+     "Type": 0,
+     "Size": 1434,
+     "Sum": "7116c737b12f8269f7bef579ff01c14d9cba8f6eb73c288d7feea9b6277df89c"
+    },
+    {
+     "Index": 119,
+     "Term": 3,
+     "Type": 0,
+     "Size": 33010,
+     "Sum": "03a0f92b6e45213bc38f0087b7b63662c6603b7e895601f6eeb207ced4e7c803"
+    },
+    {
+     "Index": 120,
+     "Term": 3,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "61151181a978fd76630aeb8760276e4a8916804468b32ecf6284eeee74dce9e2"
+    },
+    {
+     "Index": 121,
+     "Term": 3,
+     "Type": 0,
+     "Size": 1446,
+     "Sum": "4e793fbcec28c64a9e8cb0afcd2ffedf48ad58b9109f6e862d43f2073065c719"
+    },
+    {
+     "Index": 122,
+     "Term": 3,
+     "Type": 0,
+     "Size": 1124,
+     "Sum": "ecefe5d0f798d4ec5d9476b4a5a7eb8d5bf97981f6cd71cec9cafc0290ad2950"
+    },
+    {
+     "Index": 123,
+     "Term": 3,
+     "Type": 0,
+     "Size": 1412,
+     "Sum": "c0ad565d3bc5bbb2ee541755224b26171495344de4e6a56a967fabe1c9215d39"
+    },
+    {
+     "Index": 124,
+     "Term": 3,
+     "Type": 0,
+     "Size": 851,
+     "Sum": "6bd8a6a94e878feea0f5bfaaa5f286e32d97f7b14fa23c1008d8d99e0cd6c92d"
+    },
+    {
+     "Index": 125,
+     "Term": 3,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "7af01f8af61e2d299dbc34fc11b60026e31983bbf4493579fc50fddda391cff5"
+    }
+   ],
+   "Snapshot": {
+    "Metadata": "CgoIAQgCCAMQBCgAEB4YAQ==",
+    "DataSum": "a40098bcd591f9382682a908729bd9ffe84ebf2b522f23c3ac7ab42b44950968"
+   }
+  },
+  {
+   "ID": 2,
+   "HardState": "CAYQARhu",
+   "ConfState": "CAEIAigA",
+   "First": 101,
+   "Last": 112,
+   "Entries": [
+    {
+     "Index": 101,
+     "Term": 5,
+     "Type": 0,
+     "Size": 167,
+     "Sum": "ee82da1c2ea15fc0e811ec318fde056590db418e678c29f797fcf9c125f8f792"
+    },
+    {
+     "Index": 102,
+     "Term": 5,
+     "Type": 0,
+     "Size": 33010,
+     "Sum": "774c6dffd4b9cb952bf2962439d85cd340c397467da1bd98225ca6de623d2b5a"
+    },
+    {
+     "Index": 103,
+     "Term": 5,
+     "Type": 0,
+     "Size": 1438,
+     "Sum": "d8bcf5dee303767214446d3b56d96037454959581d078ae003cb064b86a87619"
+    },
+    {
+     "Index": 104,
+     "Term": 5,
+     "Type": 0,
+     "Size": 582,
+     "Sum": "dd08ccba39d870e79015026502985e1b4098786b44705155469ff07e7f8e4478"
+    },
+    {
+     "Index": 105,
+     "Term": 5,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "332bf8f60f1d1b67f2e82158ca9a019f69b3213597e9d11852dc205d63b66178"
+    },
+    {
+     "Index": 106,
+     "Term": 5,
+     "Type": 0,
+     "Size": 981,
+     "Sum": "04d6d26ddfc32cd7d500929c59eaa94e4441d62ce7ecf0c4ee5459ae4e9b08cc"
+    },
+    {
+     "Index": 107,
+     "Term": 5,
+     "Type": 0,
+     "Size": 784,
+     "Sum": "13fecf98e82dc035b8f8d228194a35ff3e8b8b2715de33fc6576040e29ea09ce"
+    },
+    {
+     "Index": 108,
+     "Term": 5,
+     "Type": 0,
+     "Size": 864,
+     "Sum": "d6aa985d3033fb360781e2e9c98fac94e84a162978b2066b431cbd1524f2ac9c"
+    },
+    {
+     "Index": 109,
+     "Term": 5,
+     "Type": 0,
+     "Size": 891,
+     "Sum": "ec00fbf77e77e063faedd953face6b3fd0bce05ae3f27e31fc16e241ddfd45d2"
+    },
+    {
+     "Index": 110,
+     "Term": 5,
+     "Type": 0,
+     "Size": 6,
+     "Sum": "487655c3fdaf73d53b6ba965b974652cd4abd61eccad1a8e4ae093ea6c6c87a8"
+    },
+    {
+     "Index": 111,
+     "Term": 6,
+     "Type": 0,
+     "Size": 1350,
+     "Sum": "eb49cdca8ba2612c38e88f59478875923347130f265d65b2b30d7e7ac9908762"
+    },
+    {
+     "Index": 112,
+     "Term": 6,
+     "Type": 0,
+     "Size": 1161,
+     "Sum": "6ff5b1ed47864c127546831c1360ccd07da2f89f20e6214d436e95a9d8b2f644"
+    }
+   ],
+   "Snapshot": {
+    "Metadata": "CgYIAQgCKAAQZBgE",
+    "DataSum": "bac4126d8e6d5bfd0e547b2b5dff0b0cb986bc44124e8f2932e19f7be654ad16"
+   }
+  },
+  {
+   "ID": 9,
+   "HardState": "CAYQCRgA",
+   "ConfState": "KAA=",
+   "First": 1,
+   "Last": 0,
+   "Entries": null,
+   "Snapshot": {
+    "Metadata": "CgIoABAAGAA=",
+    "DataSum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+   }
+  }
+ ],
+ "Removed": [
+  7
+ ]
+}

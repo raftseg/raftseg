@@ -30,6 +30,8 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/raftseg/raft"
 	"github.com/raftseg/raft/raftpb"
 	"github.com/raftseg/raftseg/internal/crashfs"
@@ -37,19 +39,19 @@ import (
 
 // termsFrom returns entries first, first+1, ... with the given terms and no
 // data, like upstream's index(first).terms(...).
-func termsFrom(first uint64, terms ...uint64) []raftpb.Entry {
-	out := make([]raftpb.Entry, len(terms))
+func termsFrom(first uint64, terms ...uint64) []*raftpb.Entry {
+	out := make([]*raftpb.Entry, len(terms))
 	for i, t := range terms {
-		out[i] = raftpb.Entry{Index: first + uint64(i), Term: t}
+		out[i] = &raftpb.Entry{Index: new(first + uint64(i)), Term: new(t)}
 	}
 	return out
 }
 
-func sameEntry(a, b raftpb.Entry) bool {
-	return a.Index == b.Index && a.Term == b.Term && a.Type == b.Type && bytes.Equal(a.Data, b.Data)
+func sameEntry(a, b *raftpb.Entry) bool {
+	return a.GetIndex() == b.GetIndex() && a.GetTerm() == b.GetTerm() && a.GetType() == b.GetType() && bytes.Equal(a.Data, b.Data)
 }
 
-func sameEntries(a, b []raftpb.Entry) bool {
+func sameEntries(a, b []*raftpb.Entry) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -61,10 +63,10 @@ func sameEntries(a, b []raftpb.Entry) bool {
 	return true
 }
 
-func fmtEntries(es []raftpb.Entry) string {
+func fmtEntries(es []*raftpb.Entry) string {
 	var parts []string
 	for _, e := range es {
-		parts = append(parts, fmt.Sprintf("%d/%d(%dB)", e.Index, e.Term, len(e.Data)))
+		parts = append(parts, fmt.Sprintf("%d/%d(%dB)", e.GetIndex(), e.GetTerm(), len(e.Data)))
 	}
 	return "[" + strings.Join(parts, " ") + "]"
 }
@@ -78,7 +80,7 @@ func upstreamStorage(t *testing.T, terms ...uint64) (*Log, *Storage) {
 	t.Cleanup(func() { l.Close() })
 	s := l.Group(1)
 	all := append([]uint64{1, 2}, terms...)
-	if err := s.Save(raftpb.HardState{Term: all[len(all)-1], Commit: 3}, termsFrom(1, all...), raftpb.Snapshot{}); err != nil {
+	if err := s.Save(&raftpb.HardState{Term: new(all[len(all)-1]), Commit: new(uint64(3))}, termsFrom(1, all...), &raftpb.Snapshot{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Compact(3); err != nil {
@@ -109,11 +111,11 @@ func TestUpstreamStorageTerm(t *testing.T) {
 
 func TestUpstreamStorageEntries(t *testing.T) {
 	es := termsFrom(3, 3, 4, 5, 6)
-	sz := func(k int) uint64 { return uint64(es[k].Size()) }
+	sz := func(k int) uint64 { return uint64(proto.Size(es[k])) }
 	for _, tt := range []struct {
 		lo, hi, maxsize uint64
 		werr            error
-		wentries        []raftpb.Entry
+		wentries        []*raftpb.Entry
 	}{
 		{2, 6, math.MaxUint64, raft.ErrCompacted, nil},
 		{3, 4, math.MaxUint64, raft.ErrCompacted, nil},
@@ -143,7 +145,7 @@ func TestUpstreamStorageLastIndex(t *testing.T) {
 	if last, err := s.LastIndex(); err != nil || last != 5 {
 		t.Fatalf("LastIndex = %d, %v", last, err)
 	}
-	if err := s.Save(raftpb.HardState{}, termsFrom(6, 5), raftpb.Snapshot{}); err != nil {
+	if err := s.Save(&raftpb.HardState{}, termsFrom(6, 5), &raftpb.Snapshot{}); err != nil {
 		t.Fatal(err)
 	}
 	if last, err := s.LastIndex(); err != nil || last != 6 {
@@ -196,10 +198,10 @@ func TestUpstreamStorageCreateSnapshot(t *testing.T) {
 	data := []byte("data")
 	for _, tt := range []struct {
 		i     uint64
-		wsnap raftpb.Snapshot
+		wsnap *raftpb.Snapshot
 	}{
-		{4, raftpb.Snapshot{Data: data, Metadata: raftpb.SnapshotMetadata{Index: 4, Term: 4, ConfState: *cs}}},
-		{5, raftpb.Snapshot{Data: data, Metadata: raftpb.SnapshotMetadata{Index: 5, Term: 5, ConfState: *cs}}},
+		{4, &raftpb.Snapshot{Data: data, Metadata: &raftpb.SnapshotMetadata{Index: new(uint64(4)), Term: new(uint64(4)), ConfState: cs}}},
+		{5, &raftpb.Snapshot{Data: data, Metadata: &raftpb.SnapshotMetadata{Index: new(uint64(5)), Term: new(uint64(5)), ConfState: cs}}},
 	} {
 		l, s := upstreamStorage(t, 3, 4, 5)
 		snap, err := s.CreateSnapshot(tt.i, cs, data)
@@ -215,8 +217,8 @@ func TestUpstreamStorageCreateSnapshot(t *testing.T) {
 
 func TestUpstreamStorageAppend(t *testing.T) {
 	for _, tt := range []struct {
-		entries  []raftpb.Entry
-		wentries []raftpb.Entry // including the compacted entry, as ms.ents
+		entries  []*raftpb.Entry
+		wentries []*raftpb.Entry // including the compacted entry, as ms.ents
 	}{
 		{termsFrom(1, 1, 2), termsFrom(3, 3, 4, 5)},
 		{termsFrom(3, 3, 4, 5), termsFrom(3, 3, 4, 5)},
@@ -230,13 +232,13 @@ func TestUpstreamStorageAppend(t *testing.T) {
 		{termsFrom(6, 5), termsFrom(3, 3, 4, 5, 5)},
 	} {
 		_, s := upstreamStorage(t, 3, 4, 5)
-		if err := s.Save(raftpb.HardState{}, tt.entries, raftpb.Snapshot{}); err != nil {
+		if err := s.Save(&raftpb.HardState{}, tt.entries, &raftpb.Snapshot{}); err != nil {
 			t.Fatalf("Append(%s): %v", fmtEntries(tt.entries), err)
 		}
 		first, _ := s.FirstIndex()
 		last, _ := s.LastIndex()
 		term, _ := s.Term(first - 1)
-		got := []raftpb.Entry{{Index: first - 1, Term: term}}
+		got := []*raftpb.Entry{{Index: new(first - 1), Term: new(term)}}
 		if first <= last {
 			es, err := s.Entries(first, last+1, math.MaxUint64)
 			if err != nil {
@@ -251,24 +253,27 @@ func TestUpstreamStorageAppend(t *testing.T) {
 }
 
 func TestUpstreamStorageApplySnapshot(t *testing.T) {
-	cs := raftpb.ConfState{Voters: []uint64{1, 2, 3}}
+	cs := &raftpb.ConfState{Voters: []uint64{1, 2, 3}}
 	data := []byte("data")
 	l := open(t, crashDir, memOpts(crashfs.New(), Options{}))
 	defer l.Close()
 	s := l.Group(1)
-	if err := s.Save(raftpb.HardState{}, nil, raftpb.Snapshot{Data: data, Metadata: raftpb.SnapshotMetadata{Index: 4, Term: 4, ConfState: cs}}); err != nil {
+	if err := s.Save(&raftpb.HardState{}, nil, &raftpb.Snapshot{Data: data, Metadata: &raftpb.SnapshotMetadata{Index: new(uint64(4)), Term: new(uint64(4)), ConfState: cs}}); err != nil {
 		t.Fatal(err)
 	}
 	// ApplySnapshot fails due to ErrSnapOutOfDate.
-	if err := s.Save(raftpb.HardState{}, nil, raftpb.Snapshot{Data: data, Metadata: raftpb.SnapshotMetadata{Index: 3, Term: 3, ConfState: cs}}); !errors.Is(err, raft.ErrSnapOutOfDate) {
+	if err := s.Save(&raftpb.HardState{}, nil, &raftpb.Snapshot{Data: data, Metadata: &raftpb.SnapshotMetadata{Index: new(uint64(3)), Term: new(uint64(3)), ConfState: cs}}); !errors.Is(err, raft.ErrSnapOutOfDate) {
 		t.Fatalf("got %v", err)
 	}
 }
 
-func sameSnapshot(a, b raftpb.Snapshot) bool {
-	am, _ := a.Metadata.Marshal()
-	bm, _ := b.Metadata.Marshal()
-	return bytes.Equal(am, bm) && bytes.Equal(a.Data, b.Data)
+// sameSnapshot compares snapshots by value: an unset field reads as its
+// zero (raft.MemoryStorage sets some unset fields when it hands a snapshot
+// out, seglog hands out what it was given).
+func sameSnapshot(a, b *raftpb.Snapshot) bool {
+	am, bm := a.GetMetadata(), b.GetMetadata()
+	return am.GetIndex() == bm.GetIndex() && am.GetTerm() == bm.GetTerm() &&
+		sameCS(am.GetConfState(), bm.GetConfState()) && bytes.Equal(a.GetData(), b.GetData())
 }
 
 // ---- the differential fuzzer ----
@@ -276,7 +281,7 @@ func sameSnapshot(a, b raftpb.Snapshot) bool {
 // contractModel is raft.MemoryStorage plus what Storage keeps beside it.
 type contractModel struct {
 	ms *raft.MemoryStorage
-	hs raftpb.HardState
+	hs *raftpb.HardState
 }
 
 func (m *contractModel) bounds() (first, last uint64) {
@@ -370,7 +375,7 @@ func (r *opReader) confState() *raftpb.ConfState {
 	case 1:
 		return &raftpb.ConfState{Voters: []uint64{1, 2, 3}}
 	}
-	return &raftpb.ConfState{Voters: []uint64{uint64(r.byte())}, Learners: []uint64{uint64(r.byte()) + 300}, AutoLeave: true}
+	return &raftpb.ConfState{Voters: []uint64{uint64(r.byte())}, Learners: []uint64{uint64(r.byte()) + 300}, AutoLeave: new(true)}
 }
 
 const maxSafeIndex = 1<<63 - 1
@@ -386,9 +391,7 @@ func checkContract(t *testing.T, what string, s *Storage, m *contractModel) {
 	}
 	hs, cs, err := s.InitialState()
 	_, mcs, _ := m.ms.InitialState()
-	mcsb, _ := mcs.Marshal()
-	csb, _ := cs.Marshal()
-	if err != nil || hs != m.hs || !bytes.Equal(csb, mcsb) {
+	if err != nil || !sameHS(hs, m.hs) || !sameCS(cs, mcs) {
 		t.Fatalf("%s: InitialState %+v %+v (%v), want %+v %+v", what, hs, cs, err, m.hs, mcs)
 	}
 	var probes []uint64
@@ -492,40 +495,40 @@ func runStorageContract(t *testing.T, input []byte) {
 		g := uint64(1 + r.byte()%groups)
 		m, s := models[g], handles[g]
 		first, last := m.bounds()
-		snapIdx := func() uint64 { sn, _ := m.ms.Snapshot(); return sn.Metadata.Index }()
+		snapIdx := func() uint64 { sn, _ := m.ms.Snapshot(); return sn.Metadata.GetIndex() }()
 		var desc string
 		switch op := r.byte() % 10; op {
 		case 0, 1, 2: // append, with or without a HardState
 			start := r.index(first, last)
 			n := int(r.byte() % 6)
 			term := uint64(r.byte() % 8)
-			var es []raftpb.Entry
+			var es []*raftpb.Entry
 			for k := 0; k < n; k++ {
 				if r.byte()%4 == 0 {
 					term = uint64(r.byte() % 8) // terms need not grow
 				}
-				es = append(es, raftpb.Entry{Index: start + uint64(k), Term: term, Type: raftpb.EntryType(r.byte() % 3), Data: r.data()})
+				es = append(es, &raftpb.Entry{Index: new(start + uint64(k)), Term: new(term), Type: raftpb.EntryType(r.byte() % 3).Enum(), Data: r.data()})
 			}
 			if r.byte()%8 == 0 && n > 1 {
-				es[n-1].Index += uint64(r.byte()%3) + 1 // a gap
+				es[n-1].Index = new(es[n-1].GetIndex() + uint64(r.byte()%3) + 1) // a gap
 			}
-			var hs raftpb.HardState
+			var hs = &raftpb.HardState{}
 			if op != 0 {
-				hs = raftpb.HardState{Term: uint64(r.byte() % 8), Vote: uint64(r.byte() % 3), Commit: r.index(first, last+uint64(n))}
+				hs = &raftpb.HardState{Term: new(uint64(r.byte() % 8)), Vote: new(uint64(r.byte() % 3)), Commit: new(r.index(first, last+uint64(n)))}
 			}
 			desc = fmt.Sprintf("Save(%+v, %s)", hs, fmtEntries(es))
 			valid := true
 			for k, e := range es {
-				if e.Index == 0 || e.Index > maxSafeIndex || (k > 0 && e.Index != es[k-1].Index+1) {
+				if e.GetIndex() == 0 || e.GetIndex() > maxSafeIndex || (k > 0 && e.GetIndex() != es[k-1].GetIndex()+1) {
 					valid = false
 				}
 			}
 			newLast := last
 			if valid && len(es) > 0 {
-				lastNew := es[len(es)-1].Index
+				lastNew := es[len(es)-1].GetIndex()
 				switch {
 				case lastNew < first:
-				case max(es[0].Index, first) > last+1:
+				case max(es[0].GetIndex(), first) > last+1:
 					valid = false // MemoryStorage panics: missing entries
 				default:
 					newLast = lastNew
@@ -535,10 +538,10 @@ func runStorageContract(t *testing.T, input []byte) {
 			if !raft.IsEmptyHardState(hs) {
 				newHS = hs
 			}
-			if valid && newHS.Commit > newLast && !raft.IsEmptyHardState(newHS) {
+			if valid && newHS.GetCommit() > newLast && !raft.IsEmptyHardState(newHS) {
 				valid = false // commit beyond the last entry
 			}
-			err := s.Save(hs, es, raftpb.Snapshot{})
+			err := s.Save(hs, es, &raftpb.Snapshot{})
 			if valid {
 				if err != nil {
 					t.Fatalf("step %d: %s: %v", step, desc, err)
@@ -584,44 +587,44 @@ func runStorageContract(t *testing.T, input []byte) {
 			}
 		case 5: // a received snapshot, with or without a HardState and entries
 			idx := r.index(first, last)
-			sn := raftpb.Snapshot{Data: r.data(), Metadata: raftpb.SnapshotMetadata{Index: idx, Term: uint64(r.byte() % 9)}}
+			sn := &raftpb.Snapshot{Data: r.data(), Metadata: &raftpb.SnapshotMetadata{Index: new(idx), Term: new(uint64(r.byte() % 9))}}
 			if cs := r.confState(); cs != nil {
-				sn.Metadata.ConfState = *cs
+				sn.Metadata.ConfState = cs
 			}
-			var hs raftpb.HardState
+			var hs = &raftpb.HardState{}
 			if r.byte()%2 == 0 {
-				hs = raftpb.HardState{Term: sn.Metadata.Term, Vote: uint64(r.byte() % 3), Commit: idx + uint64(r.byte()%3)}
+				hs = &raftpb.HardState{Term: sn.Metadata.Term, Vote: new(uint64(r.byte() % 3)), Commit: new(idx + uint64(r.byte()%3))}
 			}
-			var es []raftpb.Entry
+			var es []*raftpb.Entry
 			if r.byte()%2 == 0 {
-				es = termsFrom(idx+1, sn.Metadata.Term, sn.Metadata.Term)
+				es = termsFrom(idx+1, sn.Metadata.GetTerm(), sn.Metadata.GetTerm())
 			}
-			desc = fmt.Sprintf("Save(%+v, %s, snapshot %d/%d)", hs, fmtEntries(es), idx, sn.Metadata.Term)
+			desc = fmt.Sprintf("Save(%+v, %s, snapshot %d/%d)", hs, fmtEntries(es), idx, sn.Metadata.GetTerm())
 			err := s.Save(hs, es, sn)
-			newHS := m.hs
+			newHS := copyHardState(m.hs)
 			if !raft.IsEmptyHardState(hs) {
-				newHS = hs
+				newHS = copyHardState(hs)
 			}
-			newHS.Commit = max(newHS.Commit, idx)
+			newHS.Commit = new(max(newHS.GetCommit(), idx))
 			newLast := idx + uint64(len(es))
 			switch {
 			case idx == 0:
 				// An empty snapshot: only the entries and HardState count.
 				newLast = last
-				if len(es) > 0 && max(es[0].Index, first) > last+1 {
+				if len(es) > 0 && max(es[0].GetIndex(), first) > last+1 {
 					if err == nil {
 						t.Fatalf("step %d: %s accepted", step, desc)
 					}
 					break
 				}
-				if len(es) > 0 && es[len(es)-1].Index >= first {
-					newLast = es[len(es)-1].Index
+				if len(es) > 0 && es[len(es)-1].GetIndex() >= first {
+					newLast = es[len(es)-1].GetIndex()
 				}
 				newHS = m.hs
 				if !raft.IsEmptyHardState(hs) {
 					newHS = hs
 				}
-				if newHS.Commit > newLast || newLast > maxSafeIndex {
+				if newHS.GetCommit() > newLast || newLast > maxSafeIndex {
 					if err == nil {
 						t.Fatalf("step %d: %s accepted", step, desc)
 					}
@@ -636,7 +639,7 @@ func runStorageContract(t *testing.T, input []byte) {
 				if !errors.Is(err, raft.ErrSnapOutOfDate) {
 					t.Fatalf("step %d: %s = %v, want ErrSnapOutOfDate", step, desc, err)
 				}
-			case newLast > maxSafeIndex || newLast < idx || newHS.Commit > newLast:
+			case newLast > maxSafeIndex || newLast < idx || newHS.GetCommit() > newLast:
 				if err == nil {
 					t.Fatalf("step %d: %s accepted", step, desc)
 				}
@@ -657,7 +660,7 @@ func runStorageContract(t *testing.T, input []byte) {
 				maxSize = math.MaxUint64
 			}
 			desc = fmt.Sprintf("Entries(%d, %d, %d)", lo, hi, maxSize)
-			var want []raftpb.Entry
+			var want []*raftpb.Entry
 			var merr error
 			ok := noPanic(func() { want, merr = m.ms.Entries(lo, hi, maxSize) })
 			got, err := s.Entries(lo, hi, maxSize)
@@ -679,8 +682,8 @@ func runStorageContract(t *testing.T, input []byte) {
 				handles[gg] = l.Group(gg)
 				mm := models[gg]
 				f, _ := mm.bounds()
-				if !raft.IsEmptyHardState(mm.hs) && mm.hs.Commit < f-1 {
-					mm.hs.Commit = f - 1
+				if !raft.IsEmptyHardState(mm.hs) && mm.hs.GetCommit() < f-1 {
+					mm.hs = withCommit(mm.hs, f-1)
 				}
 			}
 		case 8: // RemoveGroup: the old handle dies, a new one starts empty
@@ -691,7 +694,7 @@ func runStorageContract(t *testing.T, input []byte) {
 			if _, err := s.FirstIndex(); !errors.Is(err, ErrGroupRemoved) {
 				t.Fatalf("step %d: removed handle: %v", step, err)
 			}
-			if err := s.Save(raftpb.HardState{Term: 1}, nil, raftpb.Snapshot{}); !errors.Is(err, ErrGroupRemoved) {
+			if err := s.Save(&raftpb.HardState{Term: new(uint64(1))}, nil, &raftpb.Snapshot{}); !errors.Is(err, ErrGroupRemoved) {
 				t.Fatalf("step %d: Save on a removed handle: %v", step, err)
 			}
 			models[g] = &contractModel{ms: raft.NewMemoryStorage()}
@@ -714,8 +717,8 @@ func runStorageContract(t *testing.T, input []byte) {
 		handles[g] = l.Group(g)
 		mm := models[g]
 		f, _ := mm.bounds()
-		if !raft.IsEmptyHardState(mm.hs) && mm.hs.Commit < f-1 {
-			mm.hs.Commit = f - 1
+		if !raft.IsEmptyHardState(mm.hs) && mm.hs.GetCommit() < f-1 {
+			mm.hs = withCommit(mm.hs, f-1)
 		}
 	}
 	checkAll("final reopen")

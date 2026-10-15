@@ -5,6 +5,8 @@ package seglog
 import (
 	"fmt"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/raftseg/raft"
 	"github.com/raftseg/raft/raftpb"
 )
@@ -78,9 +80,9 @@ func (s *Storage) read(fn func(g *group) (done bool, disk func() error, err erro
 }
 
 // InitialState implements raft.Storage.
-func (s *Storage) InitialState() (hs raftpb.HardState, cs raftpb.ConfState, err error) {
+func (s *Storage) InitialState() (hs *raftpb.HardState, cs *raftpb.ConfState, err error) {
 	err = s.read(func(g *group) (bool, func() error, error) {
-		hs, cs = g.hs, g.cs
+		hs, cs = copyHardState(g.hs), copyConfState(g.cs) // the caller's own
 		return true, nil, nil
 	})
 	return hs, cs, err
@@ -105,7 +107,7 @@ func (s *Storage) LastIndex() (i uint64, err error) {
 }
 
 // HardState returns the group's last persisted HardState.
-func (s *Storage) HardState() raftpb.HardState {
+func (s *Storage) HardState() *raftpb.HardState {
 	hs, _, _ := s.InitialState()
 	return hs
 }
@@ -134,7 +136,7 @@ func (s *Storage) Term(i uint64) (term uint64, err error) {
 }
 
 // Entries implements raft.Storage.
-func (s *Storage) Entries(lo, hi, maxSize uint64) (out []raftpb.Entry, err error) {
+func (s *Storage) Entries(lo, hi, maxSize uint64) (out []*raftpb.Entry, err error) {
 	err = s.read(func(g *group) (bool, func() error, error) {
 		out = nil
 		m := g.meta
@@ -150,20 +152,20 @@ func (s *Storage) Entries(lo, hi, maxSize uint64) (out []raftpb.Entry, err error
 		}
 		// Copy the cached suffix under the lock; read the rest from disk.
 		diskHi := hi
-		var cached []raftpb.Entry
-		if n := len(g.cache); n > 0 && hi > g.cache[0].Index {
-			c0 := g.cache[0].Index
+		var cached []*raftpb.Entry
+		if n := len(g.cache); n > 0 && hi > g.cache[0].GetIndex() {
+			c0 := g.cache[0].GetIndex()
 			from := lo
 			if from < c0 {
 				from = c0
 			}
-			cached = append([]raftpb.Entry(nil), g.cache[from-c0:hi-c0]...)
+			cached = append([]*raftpb.Entry(nil), g.cache[from-c0:hi-c0]...)
 			diskHi = from
 		}
 		appendCached := func() {
 			var size uint64
 			for i := range out {
-				size += uint64(out[i].Size())
+				size += uint64(entrySize(out[i]))
 			}
 			for _, e := range cached {
 				if !addLimited(&out, e, &size, maxSize) {
@@ -193,14 +195,15 @@ func (s *Storage) Entries(lo, hi, maxSize uint64) (out []raftpb.Entry, err error
 }
 
 // Snapshot implements raft.Storage.
-func (s *Storage) Snapshot() (snap raftpb.Snapshot, err error) {
+func (s *Storage) Snapshot() (snap *raftpb.Snapshot, err error) {
 	err = s.read(func(g *group) (bool, func() error, error) {
 		si := g.snap
-		snap = raftpb.Snapshot{}
+		snap = &raftpb.Snapshot{}
 		if si == nil {
+			snap = raftpb.EnsureSnapshot(snap) // as raft.MemoryStorage
 			return true, nil, nil
 		}
-		snap.Metadata = si.meta
+		snap.Metadata = copySnapshotMetadata(si.meta)
 		if si.ref == nil {
 			snap.Data = append([]byte(nil), si.data...)
 			return true, nil, nil
@@ -214,8 +217,11 @@ func (s *Storage) Snapshot() (snap raftpb.Snapshot, err error) {
 	return snap, err
 }
 
-// Save persists one Ready's worth of state for this group.
-func (s *Storage) Save(hs raftpb.HardState, ents []raftpb.Entry, snap raftpb.Snapshot) error {
+// Save persists one Ready's worth of state for this group. As with
+// raft.MemoryStorage, the entries are kept as given (in the entry cache):
+// they must not be changed afterwards. The hard state and snapshot are
+// copied.
+func (s *Storage) Save(hs *raftpb.HardState, ents []*raftpb.Entry, snap *raftpb.Snapshot) error {
 	if s.removed() {
 		return ErrGroupRemoved
 	}
@@ -283,8 +289,9 @@ func (s *Storage) Compact(compactIndex uint64) error {
 // SetConfState persists the group's current configuration, returned by
 // InitialState after a restart. Call it after applying a conf change. It is
 // durable when it returns.
-func (s *Storage) SetConfState(cs raftpb.ConfState) error {
-	buf, err := cs.Marshal()
+func (s *Storage) SetConfState(cs *raftpb.ConfState) error {
+	cs = copyConfState(cs) // the caller keeps its own
+	buf, err := proto.Marshal(cs)
 	if err != nil {
 		return err
 	}
@@ -295,7 +302,7 @@ func (s *Storage) SetConfState(cs raftpb.ConfState) error {
 		j := &job{st: newStage()}
 		d := j.st.delta(s.l, s.id)
 		s.l.writeRecord(j.st, recConfState, s.id, buf)
-		d.cs = &cs
+		d.cs = cs
 		s.l.dispatch(j)
 		s.l.drain()
 		return s.l.failure()
@@ -338,7 +345,7 @@ func (l *Log) RemoveGroup(id uint64) error {
 		l.runsClear(g)
 		g.terms = nil
 		if old := g.wsnap; old != nil && old.ref != nil {
-			j.after = append(j.after, func() { l.dropSnapFile(id, old.meta.Index) })
+			j.after = append(j.after, func() { l.dropSnapFile(id, old.meta.GetIndex()) })
 		}
 		g.wsnap = nil
 		l.dispatch(j)
@@ -359,7 +366,7 @@ const (
 // the group's runs and terms as of the read, stopping once the size budget
 // is exhausted (full reports that). born is where the group's first entry
 // record is (see group.born).
-func (l *Log) readEntries(id, lo, hi, maxSize uint64, runs []segRun, terms []termRun, born position) (out []raftpb.Entry, full bool, err error) {
+func (l *Log) readEntries(id, lo, hi, maxSize uint64, runs []segRun, terms []termRun, born position) (out []*raftpb.Entry, full bool, err error) {
 	var size uint64
 	want := lo
 	const chunk = 1024
@@ -428,7 +435,7 @@ func (l *Log) readEntries(id, lo, hi, maxSize uint64, runs []segRun, terms []ter
 	return out, false, nil
 }
 
-func (l *Log) readRun(id, first uint64, run []location) ([]raftpb.Entry, error) {
+func (l *Log) readRun(id, first uint64, run []location) ([]*raftpb.Entry, error) {
 	f, err := l.acquire(run[0].seg)
 	if err != nil {
 		return nil, err
@@ -439,7 +446,7 @@ func (l *Log) readRun(id, first uint64, run []location) ([]raftpb.Entry, error) 
 	if _, err := f.ReadAt(buf, base); err != nil {
 		return nil, readErr(run[0].seg, base, err)
 	}
-	out := make([]raftpb.Entry, 0, len(run))
+	out := make([]*raftpb.Entry, 0, len(run))
 	for k, loc := range run {
 		payload, err := decodeChunks(buf[loc.start-base:loc.end-base], loc.start, l.key)
 		if err != nil {
@@ -449,33 +456,33 @@ func (l *Log) readRun(id, first uint64, run []location) ([]raftpb.Entry, error) 
 		if err != nil {
 			return nil, err
 		}
-		if e.Term != loc.term {
-			return nil, fmt.Errorf("%w: group %d entry %d: term %d, index says %d", ErrCorrupt, id, e.Index, e.Term, loc.term)
+		if e.GetTerm() != loc.term {
+			return nil, fmt.Errorf("%w: group %d entry %d: term %d, index says %d", ErrCorrupt, id, e.GetIndex(), e.GetTerm(), loc.term)
 		}
 		out = append(out, e)
 	}
 	return out, nil
 }
 
-func decodeEntry(record []byte, id, index uint64) (raftpb.Entry, error) {
-	var e raftpb.Entry
+func decodeEntry(record []byte, id, index uint64) (*raftpb.Entry, error) {
+	var e = &raftpb.Entry{}
 	typ, gid, payload, err := decodeRecord(record)
 	if err != nil || (typ != recEntry && typ != recRelocate) || gid != id {
 		return e, fmt.Errorf("%w: group %d entry %d: record mismatch", ErrCorrupt, id, index)
 	}
-	if err := e.Unmarshal(payload); err != nil {
+	if err := proto.Unmarshal(payload, e); err != nil {
 		return e, fmt.Errorf("%w: group %d entry %d: %v", ErrCorrupt, id, index, err)
 	}
-	if e.Index != index {
-		return e, fmt.Errorf("%w: group %d: record holds entry %d, want %d", ErrCorrupt, id, e.Index, index)
+	if e.GetIndex() != index {
+		return e, fmt.Errorf("%w: group %d: record holds entry %d, want %d", ErrCorrupt, id, e.GetIndex(), index)
 	}
 	return e, nil
 }
 
 // addLimited appends e unless that would exceed maxSize (the first entry is
 // always included). It reports whether the caller should continue.
-func addLimited(out *[]raftpb.Entry, e raftpb.Entry, size *uint64, maxSize uint64) bool {
-	s := uint64(e.Size())
+func addLimited(out *[]*raftpb.Entry, e *raftpb.Entry, size *uint64, maxSize uint64) bool {
+	s := uint64(entrySize(e))
 	if len(*out) > 0 && *size+s > maxSize {
 		return false
 	}

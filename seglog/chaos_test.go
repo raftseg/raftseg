@@ -74,7 +74,7 @@ type chaosNet struct {
 
 type envelopeTo struct {
 	group uint64
-	msg   raftpb.Message
+	msg   *raftpb.Message
 }
 
 type chaos struct {
@@ -121,8 +121,8 @@ func runChaos(t *testing.T, nnodes, ngroups, rounds int, seed int64) {
 			t.Fatal(err)
 		}
 		for _, g := range c.groups {
-			snap := raftpb.Snapshot{Metadata: raftpb.SnapshotMetadata{Index: 1, Term: 1, ConfState: raftpb.ConfState{Voters: voters}}}
-			if err := l.Save(Update{Group: g, Snapshot: snap, HardState: raftpb.HardState{Term: 1, Commit: 1}}); err != nil {
+			snap := &raftpb.Snapshot{Metadata: &raftpb.SnapshotMetadata{Index: new(uint64(1)), Term: new(uint64(1)), ConfState: &raftpb.ConfState{Voters: voters}}}
+			if err := l.Save(Update{Group: g, Snapshot: snap, HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(1))}}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -198,7 +198,7 @@ func (c *chaos) start(n *chaosNode) {
 				c.t.Fatal(err)
 			}
 		}
-		sm.Applied, sm.snap = snap.Metadata.Index, snap.Metadata.Index
+		sm.Applied, sm.snap = snap.Metadata.GetIndex(), snap.Metadata.GetIndex()
 		rn, err := raft.NewRawNode(&raft.Config{
 			ID: n.id, ElectionTick: 10, HeartbeatTick: 1, Storage: st,
 			MaxSizePerMsg: 16 << 10, MaxInflightMsgs: 32, Applied: sm.Applied,
@@ -289,7 +289,7 @@ func (c *chaos) process(n *chaosNode) {
 			if err := json.Unmarshal(p.rd.Snapshot.Data, restored); err != nil {
 				c.t.Fatal(err)
 			}
-			sm.Values, sm.Applied, sm.snap = restored.Values, p.rd.Snapshot.Metadata.Index, p.rd.Snapshot.Metadata.Index
+			sm.Values, sm.Applied, sm.snap = restored.Values, p.rd.Snapshot.Metadata.GetIndex(), p.rd.Snapshot.Metadata.GetIndex()
 			c.snapsIn++
 		}
 		for _, m := range p.rd.Messages {
@@ -299,21 +299,21 @@ func (c *chaos) process(n *chaosNode) {
 			}
 		}
 		if st := n.rns[p.g].Status(); st.RaftState == raft.StateLeader {
-			k := [2]uint64{p.g, st.Term}
+			k := [2]uint64{p.g, st.GetTerm()}
 			if prev, ok := c.leaders[k]; ok && prev != n.id {
-				c.t.Fatalf("ELECTION SAFETY VIOLATION: group %d term %d has leaders %d and %d", p.g, st.Term, prev, n.id)
+				c.t.Fatalf("ELECTION SAFETY VIOLATION: group %d term %d has leaders %d and %d", p.g, st.GetTerm(), prev, n.id)
 			}
 			c.leaders[k] = n.id
 		}
 		for _, e := range p.rd.CommittedEntries {
-			if e.Index <= sm.Applied {
+			if e.GetIndex() <= sm.Applied {
 				continue
 			}
 			c.checkSafety(n, p.g, e)
-			if e.Type == raftpb.EntryNormal && len(e.Data) > 0 {
+			if e.GetType() == raftpb.EntryNormal && len(e.Data) > 0 {
 				sm.Values = append(sm.Values, string(e.Data))
 			}
-			sm.Applied = e.Index
+			sm.Applied = e.GetIndex()
 		}
 		n.rns[p.g].Advance(p.rd)
 		c.maybeCompact(n, p.g)
@@ -326,23 +326,23 @@ func (c *chaos) process(n *chaosNode) {
 // checkVote: a node grants at most one vote per term, even across restarts.
 // A vote is granted only after the HardState recording it was saved, so a
 // second, different vote in the same term means the storage lost it.
-func (c *chaos) checkVote(g uint64, m raftpb.Message) {
-	if m.Type != raftpb.MsgVoteResp || m.Reject {
+func (c *chaos) checkVote(g uint64, m *raftpb.Message) {
+	if m.GetType() != raftpb.MsgVoteResp || m.GetReject() {
 		return
 	}
-	k := [3]uint64{g, m.From, m.Term}
-	if prev, ok := c.votes[k]; ok && prev != m.To {
-		c.t.Fatalf("VOTE SAFETY VIOLATION: node %d voted for %d and %d in group %d term %d", m.From, prev, m.To, g, m.Term)
+	k := [3]uint64{g, m.GetFrom(), m.GetTerm()}
+	if prev, ok := c.votes[k]; ok && prev != m.GetTo() {
+		c.t.Fatalf("VOTE SAFETY VIOLATION: node %d voted for %d and %d in group %d term %d", m.GetFrom(), prev, m.GetTo(), g, m.GetTerm())
 	}
-	c.votes[k] = m.To
+	c.votes[k] = m.GetTo()
 }
 
-func (c *chaos) checkSafety(n *chaosNode, g uint64, e raftpb.Entry) {
-	key := fmt.Sprintf("%d/%x", e.Term, e.Data)
-	if prev, ok := c.truth[g][e.Index]; ok && prev != key {
-		c.t.Fatalf("SAFETY VIOLATION: node %d applied %s at group %d index %d, another node applied %s", n.id, key, g, e.Index, prev)
+func (c *chaos) checkSafety(n *chaosNode, g uint64, e *raftpb.Entry) {
+	key := fmt.Sprintf("%d/%x", e.GetTerm(), e.Data)
+	if prev, ok := c.truth[g][e.GetIndex()]; ok && prev != key {
+		c.t.Fatalf("SAFETY VIOLATION: node %d applied %s at group %d index %d, another node applied %s", n.id, key, g, e.GetIndex(), prev)
 	}
-	c.truth[g][e.Index] = key
+	c.truth[g][e.GetIndex()] = key
 }
 
 func (c *chaos) maybeCompact(n *chaosNode, g uint64) {
@@ -368,7 +368,7 @@ func (c *chaos) deliver() {
 	c.net.q = nil
 	c.rng.Shuffle(len(q), func(i, j int) { q[i], q[j] = q[j], q[i] })
 	for _, env := range q {
-		to, from := c.nodes[env.msg.To-1], c.nodes[env.msg.From-1]
+		to, from := c.nodes[env.msg.GetTo()-1], c.nodes[env.msg.GetFrom()-1]
 		ok := to.up && !c.isolated[to.id] && !c.isolated[from.id] && c.rng.Float64() >= c.drop
 		if ok {
 			_ = to.rns[env.group].Step(env.msg)
@@ -377,15 +377,15 @@ func (c *chaos) deliver() {
 			}
 		}
 		if from.up {
-			if env.msg.Type == raftpb.MsgSnap {
+			if env.msg.GetType() == raftpb.MsgSnap {
 				status := raft.SnapshotFinish
 				if !ok {
 					status = raft.SnapshotFailure
 				}
-				from.rns[env.group].ReportSnapshot(env.msg.To, status)
+				from.rns[env.group].ReportSnapshot(env.msg.GetTo(), status)
 			}
 			if !ok {
-				from.rns[env.group].ReportUnreachable(env.msg.To)
+				from.rns[env.group].ReportUnreachable(env.msg.GetTo())
 			}
 		}
 	}

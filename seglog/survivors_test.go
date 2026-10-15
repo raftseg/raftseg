@@ -8,7 +8,11 @@ package seglog
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/raftseg/raft/raftpb"
 	"github.com/raftseg/raftseg/internal/crashfs"
@@ -33,7 +37,7 @@ func fillSegments(t *testing.T, l *Log, mem *crashfs.FS, n int) uint64 {
 	i := uint64(0)
 	for len(segmentNumbers(t, mem)) < n {
 		i++
-		if err := l.Save(Update{Group: 1, Entries: ents(1, i, i, 1000), HardState: raftpb.HardState{Term: 1, Commit: i}}); err != nil {
+		if err := l.Save(Update{Group: 1, Entries: ents(1, i, i, 1000), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(i)}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -79,7 +83,7 @@ func TestResumedSegmentNameIsDurable(t *testing.T) {
 	l := open(t, crashDir, memOpts(fs, Options{SegmentSize: 64 << 10}))
 	var last uint64
 	for i := uint64(1); i < 200 && l.failure() == nil; i++ {
-		if err := l.Save(Update{Group: 1, Entries: ents(1, i, i, 1000), HardState: raftpb.HardState{Term: 1, Commit: i}}); err == nil {
+		if err := l.Save(Update{Group: 1, Entries: ents(1, i, i, 1000), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(i)}}); err == nil {
 			last = i
 		}
 	}
@@ -89,7 +93,7 @@ func TestResumedSegmentNameIsDurable(t *testing.T) {
 	}
 	// Restart (the page cache still has everything), and write a little.
 	l = open(t, crashDir, memOpts(mem, Options{SegmentSize: 64 << 10}))
-	if err := l.Save(Update{Group: 1, Entries: ents(1, last+1, last+1, 10), HardState: raftpb.HardState{Term: 1, Commit: last + 1}}); err != nil {
+	if err := l.Save(Update{Group: 1, Entries: ents(1, last+1, last+1, 10), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(last + 1)}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := l.Close(); err != nil {
@@ -112,7 +116,7 @@ func TestResumedSegmentNameIsDurable(t *testing.T) {
 func TestOpenRefusesCommitBeyondLast(t *testing.T) {
 	mem := crashfs.New()
 	l := open(t, crashDir, memOpts(mem, Options{}))
-	if err := l.Save(Update{Group: 1, Entries: ents(1, 1, 5, 10), HardState: raftpb.HardState{Term: 1, Commit: 5}}); err != nil {
+	if err := l.Save(Update{Group: 1, Entries: ents(1, 1, 5, 10), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(5))}}); err != nil {
 		t.Fatal(err)
 	}
 	l.Close()
@@ -120,7 +124,7 @@ func TestOpenRefusesCommitBeyondLast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.groups[1].hs.Commit = 6
+	c.groups[1].hs = withCommit(c.groups[1].hs, 6)
 	b := encodeCheckpointFile(c, formatVersion)
 	rewrite(t, mem, crashDir+"/CHECKPOINT-A", b)
 	rewrite(t, mem, crashDir+"/CHECKPOINT-B", b)
@@ -160,7 +164,7 @@ func TestSidecarOfLookalikeSegment(t *testing.T) {
 	}
 	for _, e := range es {
 		if !entryDataOK(e) {
-			t.Fatalf("entry %d holds %q", e.Index, e.Data[:16])
+			t.Fatalf("entry %d holds %q", e.GetIndex(), e.Data[:16])
 		}
 	}
 }
@@ -172,16 +176,16 @@ func TestStaleRecordNotReturned(t *testing.T) {
 	mem := crashfs.New()
 	opts := Options{SegmentSize: 64 << 10, CacheEntries: -1, IndexCacheBytes: 1, NoAutoGC: true}
 	l := open(t, crashDir, memOpts(mem, opts))
-	if err := l.Save(Update{Group: 1, Entries: ents(1, 1, 5, 100), HardState: raftpb.HardState{Term: 1, Commit: 3}}); err != nil {
+	if err := l.Save(Update{Group: 1, Entries: ents(1, 1, 5, 100), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(3))}}); err != nil {
 		t.Fatal(err)
 	}
 	// Overwrite entries 4 and 5 in term 2 (a new leader's log).
-	if err := l.Save(Update{Group: 1, Entries: ents(2, 4, 5, 100), HardState: raftpb.HardState{Term: 2, Commit: 5}}); err != nil {
+	if err := l.Save(Update{Group: 1, Entries: ents(2, 4, 5, 100), HardState: &raftpb.HardState{Term: new(uint64(2)), Commit: new(uint64(5))}}); err != nil {
 		t.Fatal(err)
 	}
 	// Seal the segment.
 	for i := uint64(1); len(segmentNumbers(t, mem)) < 2; i++ {
-		if err := l.Save(Update{Group: 2, Entries: ents(1, i, i, 1000), HardState: raftpb.HardState{Term: 1, Commit: i}}); err != nil {
+		if err := l.Save(Update{Group: 2, Entries: ents(1, i, i, 1000), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(i)}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -211,8 +215,8 @@ func TestStaleRecordNotReturned(t *testing.T) {
 	l = open(t, crashDir, memOpts(mem, opts))
 	defer l.Close()
 	got, err := l.Group(1).Entries(4, 5, 1<<20)
-	if err == nil && (len(got) != 1 || got[0].Term != 2) {
-		t.Fatalf("entry 4 read as term %d: the superseded record", got[0].Term)
+	if err == nil && (len(got) != 1 || got[0].GetTerm() != 2) {
+		t.Fatalf("entry 4 read as term %d: the superseded record", got[0].GetTerm())
 	}
 	if err != nil && !errors.Is(err, ErrCorrupt) {
 		t.Fatal(err)
@@ -273,11 +277,11 @@ func TestCloseReportsFailure(t *testing.T) {
 		return nil
 	})
 	l := open(t, crashDir, memOpts(fs, Options{}))
-	if err := l.Save(Update{Group: 1, Entries: ents(1, 1, 1, 10), HardState: raftpb.HardState{Term: 1, Commit: 1}}); err != nil {
+	if err := l.Save(Update{Group: 1, Entries: ents(1, 1, 1, 10), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(1))}}); err != nil {
 		t.Fatal(err)
 	}
 	fail = true
-	if err := l.Save(Update{Group: 1, Entries: ents(1, 2, 2, 10), HardState: raftpb.HardState{Term: 1, Commit: 2}}); err == nil {
+	if err := l.Save(Update{Group: 1, Entries: ents(1, 2, 2, 10), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(2))}}); err == nil {
 		t.Fatal("Save succeeded without its fsync")
 	}
 	if err := l.Close(); !errors.Is(err, crashfs.ErrInjected) {
@@ -292,13 +296,13 @@ func TestLyingMarkerRefused(t *testing.T) {
 	for _, lie := range []string{"count", "start"} {
 		mem := crashfs.New()
 		l := open(t, crashDir, memOpts(mem, Options{testDropIndexAfter: 1}))
-		if err := l.Save(Update{Group: 1, Entries: ents(1, 1, 3, 10), HardState: raftpb.HardState{Term: 1, Commit: 3}}); err != nil {
+		if err := l.Save(Update{Group: 1, Entries: ents(1, 1, 3, 10), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(3))}}); err != nil {
 			t.Fatal(err)
 		}
 		err := l.exec(func() error {
 			st := newStage()
-			e := raftpb.Entry{Index: 4, Term: 1, Data: []byte("x")}
-			eb, _ := e.Marshal()
+			e := &raftpb.Entry{Index: new(uint64(4)), Term: new(uint64(1)), Data: []byte("x")}
+			eb, _ := proto.Marshal(e)
 			l.writeEncoded(st, encodeRecord(nil, recEntry, 1, eb))
 			m := commitMarker{seq: l.seq + 1, nrecs: st.records, start: st.firstStart}
 			if lie == "count" {
@@ -325,7 +329,7 @@ func TestTornTailZeroed(t *testing.T) {
 	mem := crashfs.New()
 	l := open(t, crashDir, memOpts(mem, Options{testDropIndexAfter: 1}))
 	for i := uint64(1); i <= 4; i++ {
-		if err := l.Save(Update{Group: 1, Entries: ents(1, i, i, 3000), HardState: raftpb.HardState{Term: 1, Commit: i}}); err != nil {
+		if err := l.Save(Update{Group: 1, Entries: ents(1, i, i, 3000), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(i)}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -360,7 +364,7 @@ func TestReplayedCommitsMadeDurable(t *testing.T) {
 	// The first process writes without fsyncs, then dies.
 	l := open(t, crashDir, memOpts(mem, Options{NoSync: true}))
 	for i := uint64(1); i <= 5; i++ {
-		if err := l.Save(Update{Group: 1, Entries: ents(1, i, i, 1000), HardState: raftpb.HardState{Term: 1, Commit: i}}); err != nil {
+		if err := l.Save(Update{Group: 1, Entries: ents(1, i, i, 1000), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(i)}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -392,18 +396,18 @@ func TestSwappedSegmentsRefused(t *testing.T) {
 	l := open(t, crashDir, memOpts(mem, Options{SegmentSize: 64 << 10, testDropIndexAfter: 1}))
 	// Segment 1: group 1's entries, until it rolls.
 	for i := uint64(1); activeSegment(t, l) == 1; i++ {
-		if err := l.Save(Update{Group: 1, Entries: ents(1, i, i, 1000), HardState: raftpb.HardState{Term: 1, Commit: i}}); err != nil {
+		if err := l.Save(Update{Group: 1, Entries: ents(1, i, i, 1000), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(i)}}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// Segments 2 and 3: a HardState of group 2, then one filler group each.
 	for seg := uint64(2); seg <= 3; seg++ {
-		if err := l.Save(Update{Group: 2, HardState: raftpb.HardState{Term: seg, Vote: seg}}); err != nil {
+		if err := l.Save(Update{Group: 2, HardState: &raftpb.HardState{Term: new(seg), Vote: new(seg)}}); err != nil {
 			t.Fatal(err)
 		}
 		g := 8 + seg
 		for i := uint64(1); activeSegment(t, l) == seg; i++ {
-			if err := l.Save(Update{Group: g, Entries: ents(1, i, i, 1000), HardState: raftpb.HardState{Term: 1, Commit: i}}); err != nil {
+			if err := l.Save(Update{Group: g, Entries: ents(1, i, i, 1000), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(i)}}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -431,7 +435,7 @@ func TestDamageAfterSealedSegmentsLastCommit(t *testing.T) {
 	mem := crashfs.New()
 	l := open(t, crashDir, memOpts(mem, Options{SegmentSize: 64 << 10, testDropIndexAfter: 1}))
 	for i := uint64(1); activeSegment(t, l) == 1; i++ {
-		if err := l.Save(Update{Group: 1, Entries: ents(1, i, i, 1000), HardState: raftpb.HardState{Term: 1, Commit: i}}); err != nil {
+		if err := l.Save(Update{Group: 1, Entries: ents(1, i, i, 1000), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(i)}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -472,12 +476,12 @@ func TestEntryOfAnotherGroupNotReturned(t *testing.T) {
 	opts := Options{SegmentSize: 64 << 10, CacheEntries: -1, IndexCacheBytes: 1, NoAutoGC: true}
 	l := open(t, crashDir, memOpts(mem, opts))
 	for g := uint64(1); g <= 2; g++ {
-		if err := l.Save(Update{Group: g, Entries: ents(1, 1, 5, 100), HardState: raftpb.HardState{Term: 1, Commit: 5}}); err != nil {
+		if err := l.Save(Update{Group: g, Entries: ents(1, 1, 5, 100), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(5))}}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for i := uint64(1); len(segmentNumbers(t, mem)) < 2; i++ {
-		if err := l.Save(Update{Group: 3, Entries: ents(1, i, i, 1000), HardState: raftpb.HardState{Term: 1, Commit: i}}); err != nil {
+		if err := l.Save(Update{Group: 3, Entries: ents(1, i, i, 1000), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(i)}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -505,5 +509,124 @@ func TestEntryOfAnotherGroupNotReturned(t *testing.T) {
 	}
 	if !errors.Is(err, ErrCorrupt) {
 		t.Fatal(err)
+	}
+}
+
+// A commit marker says how far the segment was durable when the commit was
+// written, and recovery trusts it: damage before that point is corruption,
+// damage after it a torn tail. With pipelining, a commit is written while
+// earlier ones still wait for their fsync, so its marker must not claim
+// them. Here commit A waits for an fsync that is held back, commit B is
+// written behind it, and a power cut keeps B but tears A. Neither had been
+// acknowledged, so Open must discard both as a torn tail; a marker that
+// claimed A durable would make Open refuse the log instead. (The second
+// mutation run found that only TestCrashCloneConcurrent covered this, and
+// only when its timing hit the case.)
+func TestPipelinedMarkerClaimsOnlySyncedData(t *testing.T) {
+	mem := crashfs.New()
+	var (
+		mu     sync.Mutex
+		hold   bool                     // hold back segment syncs
+		held   = make(chan struct{}, 1) // a sync is being held
+		gate   = make(chan struct{})    // closed to let syncs through
+		writes int                      // segment writes since hold was set
+	)
+	fs := crashfs.WithHook(mem, func(op crashfs.Op) error {
+		if !strings.HasSuffix(op.Path, ".seg") {
+			return nil
+		}
+		mu.Lock()
+		h := hold
+		if h && op.Kind == crashfs.OpWriteAt {
+			writes++
+		}
+		mu.Unlock()
+		if h && (op.Kind == crashfs.OpSync || op.Kind == crashfs.OpSyncData) {
+			select {
+			case held <- struct{}{}:
+			default:
+			}
+			<-gate
+		}
+		return nil
+	})
+	l, err := Open(crashDir, memOpts(fs, Options{NoPreallocate: true, PipelineDepth: 4}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs := func(c uint64) *raftpb.HardState { return &raftpb.HardState{Term: new(uint64(1)), Commit: new(c)} }
+	if err := l.Save(Update{Group: 1, Entries: ents(1, 1, 10, 300), HardState: hs(10)}); err != nil {
+		t.Fatal(err)
+	}
+	seg := crashDir + "/segments/" + segName(activeSegment(t, l))
+	st, err := mem.Stat(seg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := st.Size() // where commit A starts (records start at most a chunk header later)
+
+	mu.Lock()
+	hold = true
+	mu.Unlock()
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(1)
+	go func() { // commit A: written, then its fsync is held
+		defer wg.Done()
+		errs[0] = l.Save(Update{Group: 1, Entries: ents(1, 11, 20, 300), HardState: hs(20)})
+	}()
+	<-held
+	wg.Add(1)
+	go func() { // commit B: written behind A, before A is durable
+		defer wg.Done()
+		errs[1] = l.Save(Update{Group: 2, Entries: ents(1, 1, 5, 300), HardState: hs(5)})
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		mu.Lock()
+		w := writes
+		mu.Unlock()
+		if w >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("commit B was not written while A waited for its fsync (%d writes)", w)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// The power cut keeps everything written, except a sector of A.
+	img := mem.CrashClone(100, randv2.New(randv2.NewPCG(1, 2)))
+	close(gate)
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("Save %d: %v", i, err)
+		}
+	}
+	l.Close()
+	f, err := img.OpenReadWrite(seg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt(make([]byte, 64), base+64); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	l, err = Open(crashDir, memOpts(img, Options{}))
+	if err != nil {
+		t.Fatalf("Open refused a log whose damage lies only in unacknowledged commits: %v", err)
+	}
+	defer l.Close()
+	stats, _ := l.Stats()
+	if tail := stats.Recovery.Tail; tail == nil || tail.Offset < base {
+		t.Fatalf("tail %+v, want damage at or after %d discarded", tail, base)
+	}
+	if last, _ := l.Group(1).LastIndex(); last != 10 {
+		t.Fatalf("group 1 recovered to %d, want 10 (commit A was torn)", last)
+	}
+	if last, _ := l.Group(2).LastIndex(); last != 0 {
+		t.Fatalf("group 2 recovered to %d, want 0 (commit B followed the torn commit A)", last)
 	}
 }

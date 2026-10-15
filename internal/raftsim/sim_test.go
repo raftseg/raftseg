@@ -164,6 +164,7 @@ func checkCoverage(t *testing.T, n int, total Stats) {
 		{"nodes added per run", per(total.NodesAdded), 0.3},
 		{"nodes removed per run", per(total.NodesRemoved), 0.2},
 		{"entries applied per run", float64(total.Applied) / float64(n), 50},
+		{"shared messages checked unchanged per run", float64(total.FrozenChecked) / float64(n), 1000},
 	} {
 		if c.got < c.min {
 			t.Errorf("coverage: %s %.2f, want at least %.2f", c.name, c.got, c.min)
@@ -234,6 +235,26 @@ func TestCatchesBrokenPersistence(t *testing.T) {
 				t.Fatalf("no safety or durability violation found in %d seeds", n)
 			}
 		})
+	}
+}
+
+// Nothing may change a message once it is shared (frozen.go): with storage
+// that changes entries it has handed out, the simulator must say so.
+func TestCatchesSharedMessageChanges(t *testing.T) {
+	found := 0
+	const n = 20
+	for seed := int64(1); seed <= n; seed++ {
+		o := RandomOptions(seed)
+		o.Backend = &MemBackend{Scribble: true}
+		_, err := Run(o)
+		var f *Failure
+		if errors.As(err, &f) && strings.HasPrefix(f.Msg, "shared message changed:") {
+			found++
+		}
+	}
+	t.Logf("shared message changes found in %d of %d seeds", found, n)
+	if found < n/2 {
+		t.Fatalf("shared message changes found in only %d of %d seeds", found, n)
 	}
 }
 

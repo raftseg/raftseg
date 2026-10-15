@@ -13,6 +13,8 @@ import (
 	"sort"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/raftseg/raft/raftpb"
 )
 
@@ -168,8 +170,8 @@ func (l *Log) encodeCheckpoint(gen uint64, skip map[uint64]bool) ([]byte, error)
 		w.uv(g.wmeta.compactTerm)
 		w.uv(g.born.seg)
 		w.uv(uint64(g.born.off))
-		hs, e1 := g.hs.Marshal()
-		cs, e2 := g.cs.Marshal()
+		hs, e1 := proto.Marshal(g.hs)
+		cs, e2 := proto.Marshal(g.cs)
 		if err = errors.Join(e1, e2); err != nil {
 			break
 		}
@@ -236,12 +238,15 @@ func decodeCheckpoint(b []byte) (*checkpoint, error) {
 		if r.err != nil {
 			break
 		}
-		if err := g.hs.Unmarshal(hs); err != nil {
+		var dhs raftpb.HardState
+		if err := proto.Unmarshal(hs, &dhs); err != nil {
 			return nil, fmt.Errorf("group %d: hard state: %v", id, err)
 		}
-		if err := g.cs.Unmarshal(cs); err != nil {
+		var dcs raftpb.ConfState
+		if err := proto.Unmarshal(cs, &dcs); err != nil {
 			return nil, fmt.Errorf("group %d: conf state: %v", id, err)
 		}
+		g.hs, g.cs = copyHardState(&dhs), copyConfState(&dcs)
 		if len(snap) > 0 {
 			_, s, err := decodeSnapRecord(snap)
 			if err != nil {
@@ -376,10 +381,10 @@ func termsTruncate(ts []termRun, from uint64) []termRun {
 }
 
 // termsAppend records consecutive entries following the last one known.
-func termsAppend(ts []termRun, ents []raftpb.Entry) []termRun {
+func termsAppend(ts []termRun, ents []*raftpb.Entry) []termRun {
 	for i := range ents {
-		if n := len(ts); n == 0 || ts[n-1].term != ents[i].Term {
-			ts = append(ts, termRun{ents[i].Index, ents[i].Term})
+		if n := len(ts); n == 0 || ts[n-1].term != ents[i].GetTerm() {
+			ts = append(ts, termRun{ents[i].GetIndex(), ents[i].GetTerm()})
 		}
 	}
 	return ts

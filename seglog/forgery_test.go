@@ -8,6 +8,8 @@ import (
 	"errors"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/raftseg/raft/raftpb"
 	"github.com/raftseg/raftseg/internal/crashfs"
 )
@@ -63,13 +65,13 @@ func TestForgedMarkerInPayload(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := l.Save(Update{Group: 1, Entries: ents(1, 1, 3, 400), HardState: raftpb.HardState{Term: 1, Commit: 3}}); err != nil {
+		if err := l.Save(Update{Group: 1, Entries: ents(1, 1, 3, 400), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(3))}}); err != nil {
 			t.Fatal(err)
 		}
 		// The attacker cannot know the key; key 0 is what the format used.
 		marker := encodeRecord(nil, recCommit, 0, commitMarker{seq: 99, nrecs: 1, start: 1 << 40, synced: 1 << 40}.encode(nil))
 		payload := append(bytes.Repeat([]byte{0xaa}, 2000), forgedChunk(marker, 0)...)
-		if err := l.Save(Update{Group: 2, Entries: []raftpb.Entry{{Index: 1, Term: 1, Data: payload}}, HardState: raftpb.HardState{Term: 1, Commit: 1}}); err != nil {
+		if err := l.Save(Update{Group: 2, Entries: []*raftpb.Entry{{Index: new(uint64(1)), Term: new(uint64(1)), Data: payload}}, HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(1))}}); err != nil {
 			t.Fatal(err)
 		}
 		key := l.key
@@ -116,14 +118,14 @@ func TestForgedEntryAfterDamage(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := l.Save(Update{Group: 1, Entries: ents(1, 1, 10, 100), HardState: raftpb.HardState{Term: 1, Commit: 10}}); err != nil {
+		if err := l.Save(Update{Group: 1, Entries: ents(1, 1, 10, 100), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(10))}}); err != nil {
 			t.Fatal(err)
 		}
-		evil := raftpb.Entry{Index: 5, Term: 1, Data: []byte("EVIL")}
-		eb, _ := evil.Marshal()
+		evil := &raftpb.Entry{Index: new(uint64(5)), Term: new(uint64(1)), Data: []byte("EVIL")}
+		eb, _ := proto.Marshal(evil)
 		payload := append(bytes.Repeat([]byte{0xbb}, 100), forgedChunk(encodeRecord(nil, recEntry, 1, eb), 0)...)
 		payload = append(payload, bytes.Repeat([]byte{0xcc}, 100)...)
-		if err := l.Save(Update{Group: 2, Entries: []raftpb.Entry{{Index: 1, Term: 1, Data: payload}}, HardState: raftpb.HardState{Term: 1, Commit: 1}}); err != nil {
+		if err := l.Save(Update{Group: 2, Entries: []*raftpb.Entry{{Index: new(uint64(1)), Term: new(uint64(1)), Data: payload}}, HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(1))}}); err != nil {
 			t.Fatal(err)
 		}
 		key := l.key

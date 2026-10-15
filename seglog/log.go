@@ -20,6 +20,7 @@
 package seglog
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -27,6 +28,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/raftseg/raft"
 	"github.com/raftseg/raft/raftpb"
@@ -148,9 +151,9 @@ func (o *Options) setDefaults() {
 // Update is what one raft group needs persisted from one Ready.
 type Update struct {
 	Group     uint64
-	HardState raftpb.HardState
-	Entries   []raftpb.Entry
-	Snapshot  raftpb.Snapshot
+	HardState *raftpb.HardState
+	Entries   []*raftpb.Entry
+	Snapshot  *raftpb.Snapshot
 }
 
 var (
@@ -249,13 +252,13 @@ type segState struct {
 type group struct {
 	// Published state, guarded by Log.mu.
 	meta       groupMeta
-	hs         raftpb.HardState
-	cs         raftpb.ConfState
+	hs         *raftpb.HardState
+	cs         *raftpb.ConfState
 	snap       *snapInfo
 	pruns      []segRun  // never mutated once published
 	pterms     []termRun // never mutated once published
 	version    uint64    // odd while a change is in flight
-	cache      []raftpb.Entry
+	cache      []*raftpb.Entry
 	cacheBytes int64
 	removed    bool
 	// born is where the group's first entry record is (zero until it has
@@ -267,7 +270,7 @@ type group struct {
 
 	// Writer-owned state, including commits not yet published.
 	wmeta groupMeta
-	whs   raftpb.HardState
+	whs   *raftpb.HardState
 	wsnap *snapInfo
 	runs  []segRun  // which segment holds which index range
 	terms []termRun // term of every entry in [first, last]
@@ -286,7 +289,7 @@ type request struct {
 type encodedUpdate struct {
 	ents  [][]byte // one record per entry
 	hsRec []byte   // HardState record, nil if empty
-	hsVal raftpb.HardState
+	hsVal *raftpb.HardState
 }
 
 // MaxEntryBytes is the largest encoded entry Save accepts.
@@ -300,15 +303,25 @@ func encodeUpdates(us []Update) ([]encodedUpdate, error) {
 			out[i].ents = make([][]byte, len(u.Entries))
 		}
 		for k := range u.Entries {
-			data, err := u.Entries[k].Marshal()
+			if u.Entries[k] == nil {
+				return nil, fmt.Errorf("%w: group %d: entry %d of the update is nil", ErrInvalidUpdate, u.Group, k)
+			}
+			// The record (as encodeRecord frames it), with the entry
+			// encoded straight into it. 48 bytes cover the entry's
+			// fields other than its data.
+			rec := make([]byte, 0, 1+binary.MaxVarintLen64+len(u.Entries[k].GetData())+48)
+			rec = binary.AppendUvarint(append(rec, recEntry), u.Group)
+			hdr := len(rec)
+			rec, err := proto.MarshalOptions{}.MarshalAppend(rec, u.Entries[k])
 			if err != nil {
 				return nil, err
 			}
-			if len(data) > MaxEntryBytes {
-				return nil, fmt.Errorf("seglog: group %d entry %d is %d bytes, limit %d", u.Group, u.Entries[k].Index, len(data), MaxEntryBytes)
+			size := len(rec) - hdr
+			if size > MaxEntryBytes {
+				return nil, fmt.Errorf("seglog: group %d entry %d is %d bytes, limit %d", u.Group, u.Entries[k].GetIndex(), size, MaxEntryBytes)
 			}
-			out[i].ents[k] = encodeRecord(make([]byte, 0, len(data)+11), recEntry, u.Group, data)
-			total += len(data)
+			out[i].ents[k] = rec
+			total += size
 		}
 		if err := out[i].setHardState(u.Group, u.HardState); err != nil {
 			return nil, err
@@ -320,12 +333,14 @@ func encodeUpdates(us []Update) ([]encodedUpdate, error) {
 	return out, nil
 }
 
-func (e *encodedUpdate) setHardState(group uint64, hs raftpb.HardState) error {
+func (e *encodedUpdate) setHardState(group uint64, hs *raftpb.HardState) error {
 	e.hsRec, e.hsVal = nil, hs
 	if raft.IsEmptyHardState(hs) {
 		return nil
 	}
-	data, err := hs.Marshal()
+	hs = copyHardState(hs) // the caller keeps its own
+	e.hsVal = hs
+	data, err := proto.Marshal(hs)
 	if err != nil {
 		return err
 	}
@@ -495,7 +510,8 @@ func (l *Log) closeFiles() {
 // Save durably persists updates for one or more groups. Concurrent Save calls
 // are coalesced into one segment fsync (group commit). When Save returns nil
 // the updates are durable and visible to readers. An I/O error is sticky:
-// the Log must then be closed and reopened.
+// the Log must then be closed and reopened. The updates' entries are kept
+// as given (see Storage.Save): they must not be changed afterwards.
 func (l *Log) Save(updates ...Update) error {
 	return l.save(nil, updates)
 }
@@ -554,9 +570,9 @@ func updatesBytes(us []Update) int64 {
 	var n int64
 	for _, u := range us {
 		for i := range u.Entries {
-			n += int64(len(u.Entries[i].Data)) + 32
+			n += int64(len(u.Entries[i].GetData())) + 32
 		}
-		n += int64(len(u.Snapshot.Data))
+		n += int64(len(u.Snapshot.GetData()))
 	}
 	return n
 }
@@ -666,7 +682,7 @@ type delta struct {
 	snap     *snapInfo
 	reset    bool // a received snapshot replaced the log
 	remove   bool
-	appended [][]raftpb.Entry
+	appended [][]*raftpb.Entry
 	runs     []segRun  // published with the commit (set by dispatch)
 	terms    []termRun // likewise
 }
@@ -685,7 +701,8 @@ func (st *stage) delta(l *Log, id uint64) *delta {
 }
 
 func newGroup() *group {
-	return &group{meta: groupMeta{first: 1}, wmeta: groupMeta{first: 1}}
+	return &group{meta: groupMeta{first: 1}, wmeta: groupMeta{first: 1},
+		hs: &raftpb.HardState{}, whs: &raftpb.HardState{}, cs: &raftpb.ConfState{}}
 }
 
 func (l *Log) groupOrCreate(id uint64) *group {
@@ -782,7 +799,7 @@ func (l *Log) validate(st *stage, ups []Update) error {
 	type sim struct {
 		group    uint64
 		meta     groupMeta
-		hs       raftpb.HardState
+		hs       *raftpb.HardState
 		snap     uint64
 		snapSeen bool
 	}
@@ -811,7 +828,7 @@ func (l *Log) validate(st *stage, ups []Update) error {
 			if d := st.deltas[u.Group]; d != nil {
 				n.meta, n.hs, n.snap = d.meta, d.g.whs, d.g.wsnap.index()
 				if d.hs != nil {
-					n.hs = *d.hs
+					n.hs = d.hs
 				}
 			} else {
 				l.mu.RLock()
@@ -834,7 +851,7 @@ func (l *Log) validate(st *stage, ups []Update) error {
 		}
 		s := &sims[i]
 		if !raft.IsEmptySnap(u.Snapshot) {
-			idx := u.Snapshot.Metadata.Index
+			idx := u.Snapshot.GetMetadata().GetIndex()
 			switch {
 			case s.snapSeen:
 				return fmt.Errorf("%w: group %d: two snapshots in one Save", ErrInvalidUpdate, u.Group)
@@ -849,32 +866,32 @@ func (l *Log) validate(st *stage, ups []Update) error {
 			if !raft.IsEmptyHardState(u.HardState) {
 				s.hs = u.HardState
 			}
-			s.hs.Commit = max(s.hs.Commit, idx)
+			s.hs = withCommit(s.hs, max(s.hs.GetCommit(), idx))
 		} else if !raft.IsEmptyHardState(u.HardState) {
 			s.hs = u.HardState
 		}
 		if ents := u.Entries; len(ents) > 0 {
 			for j, e := range ents {
 				switch {
-				case e.Index == 0:
+				case e.GetIndex() == 0:
 					return fmt.Errorf("%w: group %d: entry index 0", ErrInvalidUpdate, u.Group)
-				case e.Index > maxIndex:
-					return fmt.Errorf("%w: group %d: entry index %d is out of range", ErrInvalidUpdate, u.Group, e.Index)
-				case j > 0 && e.Index != ents[j-1].Index+1:
-					return fmt.Errorf("%w: group %d: non-contiguous entries %d, %d", ErrInvalidUpdate, u.Group, ents[j-1].Index, e.Index)
+				case e.GetIndex() > maxIndex:
+					return fmt.Errorf("%w: group %d: entry index %d is out of range", ErrInvalidUpdate, u.Group, e.GetIndex())
+				case j > 0 && e.GetIndex() != ents[j-1].GetIndex()+1:
+					return fmt.Errorf("%w: group %d: non-contiguous entries %d, %d", ErrInvalidUpdate, u.Group, ents[j-1].GetIndex(), e.GetIndex())
 				}
 			}
-			if lastNew := ents[len(ents)-1].Index; lastNew >= s.meta.first {
-				if max(ents[0].Index, s.meta.first) > s.meta.last+1 {
-					return fmt.Errorf("%w: group %d: missing log entry [last: %d, append at: %d]", ErrInvalidUpdate, u.Group, s.meta.last, ents[0].Index)
+			if lastNew := ents[len(ents)-1].GetIndex(); lastNew >= s.meta.first {
+				if max(ents[0].GetIndex(), s.meta.first) > s.meta.last+1 {
+					return fmt.Errorf("%w: group %d: missing log entry [last: %d, append at: %d]", ErrInvalidUpdate, u.Group, s.meta.last, ents[0].GetIndex())
 				}
 				s.meta.last = lastNew
 			}
 		}
 	}
 	for i := range sims {
-		if s := &sims[i]; !isEmptyHS(s.hs) && s.hs.Commit > s.meta.last {
-			return fmt.Errorf("%w: group %d: commit index %d would be beyond the last entry %d", ErrInvalidUpdate, s.group, s.hs.Commit, s.meta.last)
+		if s := &sims[i]; !isEmptyHS(s.hs) && s.hs.GetCommit() > s.meta.last {
+			return fmt.Errorf("%w: group %d: commit index %d would be beyond the last entry %d", ErrInvalidUpdate, s.group, s.hs.GetCommit(), s.meta.last)
 		}
 	}
 	return nil
@@ -884,35 +901,35 @@ func (l *Log) validate(st *stage, ups []Update) error {
 // written (raft.MemoryStorage.Append semantics: entries below FirstIndex are
 // ignored, overlapping entries replace the existing suffix). Its own checks
 // repeat validate's, as a safeguard.
-func (l *Log) plan(st *stage, ups []Update) ([][]raftpb.Entry, error) {
+func (l *Log) plan(st *stage, ups []Update) ([][]*raftpb.Entry, error) {
 	sim := map[uint64]groupMeta{}
-	out := make([][]raftpb.Entry, len(ups))
+	out := make([][]*raftpb.Entry, len(ups))
 	for i, u := range ups {
 		ents := u.Entries
 		if len(ents) == 0 {
 			continue
 		}
 		for j := 1; j < len(ents); j++ {
-			if ents[j].Index != ents[j-1].Index+1 {
-				return nil, fmt.Errorf("%w: group %d: non-contiguous entries %d, %d", ErrInvalidUpdate, u.Group, ents[j-1].Index, ents[j].Index)
+			if ents[j].GetIndex() != ents[j-1].GetIndex()+1 {
+				return nil, fmt.Errorf("%w: group %d: non-contiguous entries %d, %d", ErrInvalidUpdate, u.Group, ents[j-1].GetIndex(), ents[j].GetIndex())
 			}
 		}
-		if ents[0].Index == 0 {
+		if ents[0].GetIndex() == 0 {
 			return nil, fmt.Errorf("%w: group %d: entry index 0", ErrInvalidUpdate, u.Group)
 		}
 		m, ok := sim[u.Group]
 		if !ok {
 			m = st.delta(l, u.Group).meta
 		}
-		lastNew := ents[len(ents)-1].Index
+		lastNew := ents[len(ents)-1].GetIndex()
 		if lastNew < m.first {
 			continue
 		}
-		if m.first > ents[0].Index {
-			ents = ents[m.first-ents[0].Index:]
+		if m.first > ents[0].GetIndex() {
+			ents = ents[m.first-ents[0].GetIndex():]
 		}
-		if ents[0].Index > m.last+1 {
-			return nil, fmt.Errorf("%w: group %d: missing log entry [last: %d, append at: %d]", ErrInvalidUpdate, u.Group, m.last, ents[0].Index)
+		if ents[0].GetIndex() > m.last+1 {
+			return nil, fmt.Errorf("%w: group %d: missing log entry [last: %d, append at: %d]", ErrInvalidUpdate, u.Group, m.last, ents[0].GetIndex())
 		}
 		m.last = lastNew
 		sim[u.Group] = m
@@ -930,12 +947,11 @@ func (l *Log) stageRequest(st *stage, r *request) error {
 	for i, u := range ups {
 		d := st.delta(l, u.Group)
 		if ents := planned[i]; len(ents) > 0 {
-			l.writeEntries(st, d, ents, r.enc[i].ents[ents[0].Index-u.Entries[0].Index:])
+			l.writeEntries(st, d, ents, r.enc[i].ents[ents[0].GetIndex()-u.Entries[0].GetIndex():])
 		}
 		if r.enc[i].hsRec != nil {
 			l.writeEncoded(st, r.enc[i].hsRec)
-			hs := r.enc[i].hsVal
-			d.hs = &hs
+			d.hs = r.enc[i].hsVal
 		}
 	}
 	return nil
@@ -943,25 +959,25 @@ func (l *Log) stageRequest(st *stage, r *request) error {
 
 // writeEntries writes encoded entry records, replacing any suffix of the
 // group's log they overlap.
-func (l *Log) writeEntries(st *stage, d *delta, ents []raftpb.Entry, recs [][]byte) {
+func (l *Log) writeEntries(st *stage, d *delta, ents []*raftpb.Entry, recs [][]byte) {
 	g := d.g
-	if ents[0].Index <= d.meta.last {
-		l.runsRemoveFrom(g, ents[0].Index)
-		g.terms = termsTruncate(g.terms, ents[0].Index)
+	if ents[0].GetIndex() <= d.meta.last {
+		l.runsRemoveFrom(g, ents[0].GetIndex())
+		g.terms = termsTruncate(g.terms, ents[0].GetIndex())
 	}
 	for k := range ents {
 		loc := l.writeEncoded(st, recs[k])
 		st.entries++
-		st.idx = append(st.idx, pendingIdx{d.id, ents[k].Index, loc.start, loc.end})
+		st.idx = append(st.idx, pendingIdx{d.id, ents[k].GetIndex(), loc.start, loc.end})
 		if k == 0 && g.born.seg == 0 {
 			l.mu.Lock()
 			g.born = position{loc.seg, loc.start}
 			l.mu.Unlock()
 		}
 	}
-	l.runsAppend(g, l.active, ents[0].Index, ents[len(ents)-1].Index)
+	l.runsAppend(g, l.active, ents[0].GetIndex(), ents[len(ents)-1].GetIndex())
 	g.terms = termsAppend(g.terms, ents)
-	d.meta.last = ents[len(ents)-1].Index
+	d.meta.last = ents[len(ents)-1].GetIndex()
 	d.appended = append(d.appended, ents)
 }
 
@@ -1026,7 +1042,7 @@ func (l *Log) dispatch(j *job) {
 				d := j.st.deltas[id]
 				d.g.wmeta = d.meta
 				if d.hs != nil {
-					d.g.whs = *d.hs
+					d.g.whs = d.hs
 				}
 				if !d.remove {
 					d.runs = append([]segRun(nil), d.g.runs...)
@@ -1199,10 +1215,10 @@ func (l *Log) publish(j *job) {
 		}
 		g.meta = d.meta
 		if d.hs != nil {
-			g.hs = *d.hs
+			g.hs = d.hs
 		}
 		if d.cs != nil {
-			g.cs = *d.cs
+			g.cs = d.cs
 		}
 		if d.snap != nil {
 			g.snap = d.snap
@@ -1227,10 +1243,10 @@ func (l *Log) publish(j *job) {
 
 // ---- cache (callers hold l.mu for writing) ----
 
-func entriesBytes(es []raftpb.Entry) int64 {
+func entriesBytes(es []*raftpb.Entry) int64 {
 	var n int64
 	for i := range es {
-		n += int64(es[i].Size())
+		n += int64(entrySize(es[i]))
 	}
 	return n
 }
@@ -1242,19 +1258,19 @@ func (l *Log) cacheAdjust(g *group, delta int64) {
 
 // cacheAppend keeps the newest CacheEntries entries of a group; the cache
 // always ends at the group's last index. Accounting is incremental.
-func (l *Log) cacheAppend(g *group, ents []raftpb.Entry) {
+func (l *Log) cacheAppend(g *group, ents []*raftpb.Entry) {
 	max := l.opts.CacheEntries
 	if max <= 0 || len(ents) == 0 {
 		return
 	}
-	start := ents[0].Index
-	if n := len(g.cache); n > 0 && start >= g.cache[0].Index && start <= g.cache[n-1].Index+1 {
-		cut := start - g.cache[0].Index
+	start := ents[0].GetIndex()
+	if n := len(g.cache); n > 0 && start >= g.cache[0].GetIndex() && start <= g.cache[n-1].GetIndex()+1 {
+		cut := start - g.cache[0].GetIndex()
 		l.cacheAdjust(g, -entriesBytes(g.cache[cut:]))
 		g.cache = append(g.cache[:cut], ents...)
 	} else {
 		l.cacheAdjust(g, -g.cacheBytes)
-		g.cache = append(make([]raftpb.Entry, 0, len(ents)), ents...)
+		g.cache = append(make([]*raftpb.Entry, 0, len(ents)), ents...)
 	}
 	l.cacheAdjust(g, entriesBytes(ents))
 	if len(g.cache) > max {
@@ -1271,7 +1287,7 @@ func (l *Log) cacheDropOldest(g *group, n int) {
 	l.cacheAdjust(g, -entriesBytes(g.cache[:n]))
 	rest := g.cache[n:]
 	if cap(rest) > 2*len(rest)+16 {
-		rest = append(make([]raftpb.Entry, 0, len(rest)), rest...)
+		rest = append(make([]*raftpb.Entry, 0, len(rest)), rest...)
 	}
 	g.cache = rest
 }
@@ -1279,8 +1295,8 @@ func (l *Log) cacheDropOldest(g *group, n int) {
 func (l *Log) cacheClear(g *group) { l.cacheDropOldest(g, len(g.cache)) }
 
 func (l *Log) cacheTrimBelow(g *group, first uint64) {
-	if len(g.cache) > 0 && first > g.cache[0].Index {
-		l.cacheDropOldest(g, int(first-g.cache[0].Index))
+	if len(g.cache) > 0 && first > g.cache[0].GetIndex() {
+		l.cacheDropOldest(g, int(first-g.cache[0].GetIndex()))
 	}
 }
 

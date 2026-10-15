@@ -26,6 +26,8 @@ import (
 	"sort"
 	"strings"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/raftseg/raft"
 	"github.com/raftseg/raft/confchange"
 	pb "github.com/raftseg/raft/raftpb"
@@ -191,6 +193,7 @@ type Stats struct {
 	Transfers, Campaigns                  int
 	NodesAdded, NodesRemoved              int
 	HealTicks                             int64
+	FrozenChecked                         int64 // shared messages checked unchanged (frozen.go)
 	Fingerprint                           uint64
 }
 
@@ -216,6 +219,7 @@ func (s *Stats) Add(o Stats) {
 	s.Delivered += o.Delivered
 	s.Dropped += o.Dropped
 	s.Duplicated += o.Duplicated
+	s.FrozenChecked += o.FrozenChecked
 	s.Transfers += o.Transfers
 	s.Campaigns += o.Campaigns
 	s.NodesAdded += o.NodesAdded
@@ -248,15 +252,15 @@ type node struct {
 	rn             *raft.RawNode
 	st             Storage
 	sm             smState
-	cs             pb.ConfState // as of sm.applied
-	appendQ        []pb.Message
-	applyQ         []pb.Message
+	cs             *pb.ConfState // as of sm.applied
+	appendQ        []*pb.Message
+	applyQ         []*pb.Message
 }
 
 type envelope struct {
 	at  int64
 	seq uint64
-	m   pb.Message
+	m   *pb.Message
 }
 
 type msgQueue []envelope
@@ -296,6 +300,7 @@ type Cluster struct {
 	recentReads [][]byte
 	healing     bool
 	chk         *checker
+	frozen      frozen // see frozen.go
 	stats       Stats
 	fp          uint64 // fingerprint of the run, for determinism checks
 	trace       []string
@@ -384,11 +389,19 @@ func (quietLogger) Debug(...any)          {}
 func (quietLogger) Debugf(string, ...any) {}
 func (quietLogger) Info(...any)           {}
 func (quietLogger) Infof(string, ...any)  {}
-func (l quietLogger) Warning(v ...any)    { l.c.tracef("raft warning: %s", fmt.Sprint(v...)) }
+func (l quietLogger) Warning(v ...any) {
+	if l.c.o.Trace {
+		l.c.tracef("raft warning: %s", fmt.Sprint(v...))
+	}
+}
 func (l quietLogger) Warningf(f string, v ...any) {
 	l.c.tracef("raft warning: "+f, v...)
 }
-func (l quietLogger) Error(v ...any)            { l.c.tracef("raft error: %s", fmt.Sprint(v...)) }
+func (l quietLogger) Error(v ...any) {
+	if l.c.o.Trace {
+		l.c.tracef("raft error: %s", fmt.Sprint(v...))
+	}
+}
 func (l quietLogger) Errorf(f string, v ...any) { l.c.tracef("raft error: "+f, v...) }
 func (quietLogger) Fatal(v ...any)              { panic(fmt.Sprint(v...)) }
 func (quietLogger) Fatalf(f string, v ...any)   { panic(fmt.Sprintf(f, v...)) }
@@ -424,7 +437,7 @@ func (c *Cluster) raftConfig(n *node) *raft.Config {
 const bootstrapIndex = 2
 
 func (c *Cluster) bootstrap() {
-	var cs pb.ConfState
+	var cs = &pb.ConfState{}
 	for i := 0; i < c.o.Voters+c.o.Learners; i++ {
 		id := uint64(i + 1)
 		if i < c.o.Voters {
@@ -437,10 +450,10 @@ func (c *Cluster) bootstrap() {
 	initial := smState{applied: bootstrapIndex}
 	c.chk.digests[bootstrapIndex] = initial.digest
 	c.chk.configs[bootstrapIndex] = cs
-	snap := pb.Snapshot{Data: initial.encode(), Metadata: pb.SnapshotMetadata{Index: bootstrapIndex, Term: 1, ConfState: cs}}
+	snap := &pb.Snapshot{Data: initial.encode(), Metadata: &pb.SnapshotMetadata{Index: new(uint64(bootstrapIndex)), Term: new(uint64(1)), ConfState: cs}}
 	for id := uint64(1); id < c.nextID; id++ {
 		n := c.newNode(id)
-		if err := n.st.Save(snap, nil, pb.HardState{}); err != nil {
+		if err := n.st.Save(snap, nil, &pb.HardState{}); err != nil {
 			c.fail("bootstrap: %v", err)
 		}
 		if err := n.st.Sync(); err != nil {
@@ -468,10 +481,10 @@ func (c *Cluster) start(n *node) {
 		c.fail("node %d: snapshot: %v", n.id, err)
 	}
 	n.sm = smState{}
-	n.cs = pb.ConfState{}
+	n.cs = &pb.ConfState{}
 	if !raft.IsEmptySnap(snap) {
 		n.sm = c.chk.decodeSnapshot(n, snap)
-		n.cs = snap.Metadata.ConfState
+		n.cs = snap.GetMetadata().GetConfState()
 	}
 	rn, err := raft.NewRawNode(c.raftConfig(n))
 	if err != nil {
@@ -517,8 +530,8 @@ func (c *Cluster) leader() *node {
 	var term uint64
 	for _, n := range c.upNodes() {
 		st := n.rn.BasicStatus()
-		if st.RaftState == raft.StateLeader && st.Term >= term {
-			best, term = n, st.Term
+		if st.RaftState == raft.StateLeader && st.GetTerm() >= term {
+			best, term = n, st.GetTerm()
 		}
 	}
 	return best
@@ -589,10 +602,11 @@ func (c *Cluster) drain() {
 
 func (c *Cluster) handleReady(n *node) {
 	rd := n.rn.Ready()
+	c.freezeReady(n, rd)
 	c.chk.onReady(n, rd)
 	if n.async {
 		for _, m := range rd.Messages {
-			switch m.To {
+			switch m.GetTo() {
 			case raft.LocalAppendThread:
 				n.appendQ = append(n.appendQ, m)
 			case raft.LocalApplyThread:
@@ -639,6 +653,21 @@ func (c *Cluster) handleReady(n *node) {
 	c.chk.observe(n)
 }
 
+// freezeReady records what rd hands out (frozen.go).
+func (c *Cluster) freezeReady(n *node, rd raft.Ready) {
+	c.freeze(n, "Ready hard state", rd.HardState)
+	c.freeze(n, "Ready snapshot", rd.Snapshot)
+	for _, e := range rd.Entries {
+		c.freeze(n, "Ready entry", e)
+	}
+	for _, e := range rd.CommittedEntries {
+		c.freeze(n, "Ready committed entry", e)
+	}
+	for _, m := range rd.Messages {
+		c.freeze(n, "Ready message", m)
+	}
+}
+
 // maybeCrash crashes n part way through handling its storage, now and then.
 func (c *Cluster) maybeCrash(n *node) bool {
 	if c.healing || c.o.CrashRate == 0 || c.rng.Float64() >= c.o.CrashRate*5 {
@@ -648,8 +677,8 @@ func (c *Cluster) maybeCrash(n *node) bool {
 	return true
 }
 
-func hardStateOf(m pb.Message) pb.HardState {
-	return pb.HardState{Term: m.Term, Vote: m.Vote, Commit: m.Commit}
+func hardStateOf(m *pb.Message) *pb.HardState {
+	return &pb.HardState{Term: m.Term, Vote: m.Vote, Commit: m.Commit}
 }
 
 // runAppend is the local append thread: it persists the head of appendQ,
@@ -657,9 +686,9 @@ func hardStateOf(m pb.Message) pb.HardState {
 func (c *Cluster) runAppend(n *node) {
 	m := n.appendQ[0]
 	n.appendQ = n.appendQ[1:]
-	var snap pb.Snapshot
-	if m.Snapshot != nil {
-		snap = *m.Snapshot
+	snap := m.Snapshot
+	if snap == nil {
+		snap = &pb.Snapshot{}
 	}
 	if err := n.st.Save(snap, m.Entries, hardStateOf(m)); err != nil {
 		c.fail("node %d: save: %v", n.id, err)
@@ -688,13 +717,13 @@ func (c *Cluster) runApply(n *node) {
 	c.respond(n, m.Responses)
 }
 
-func (c *Cluster) respond(n *node, resps []pb.Message) {
+func (c *Cluster) respond(n *node, resps []*pb.Message) {
 	for _, r := range resps {
-		if r.To == n.id {
+		if r.GetTo() == n.id {
 			// A node that has applied its own removal no longer knows
 			// itself as a peer.
 			if err := n.rn.Step(r); err != nil && !errors.Is(err, raft.ErrStepPeerNotFound) {
-				c.fail("node %d: stepping local response %s: %v", n.id, r.Type, err)
+				c.fail("node %d: stepping local response %s: %v", n.id, r.GetType(), err)
 			}
 		} else {
 			c.send(n, r)
@@ -709,55 +738,55 @@ func (c *Cluster) readStates(n *node, rss []raft.ReadState) {
 	}
 }
 
-func (c *Cluster) restore(n *node, snap pb.Snapshot) {
-	if snap.Metadata.Index <= n.sm.applied {
+func (c *Cluster) restore(n *node, snap *pb.Snapshot) {
+	if snap.GetMetadata().GetIndex() <= n.sm.applied {
 		return
 	}
 	n.sm = c.chk.decodeSnapshot(n, snap)
-	n.cs = snap.Metadata.ConfState
+	n.cs = snap.GetMetadata().GetConfState()
 	c.stats.SnapRestore++
-	c.tracef("node %d restored snapshot %d", n.id, snap.Metadata.Index)
-	c.chk.onConfig(n, snap.Metadata.Index, n.cs, false)
+	c.tracef("node %d restored snapshot %d", n.id, snap.GetMetadata().GetIndex())
+	c.chk.onConfig(n, snap.GetMetadata().GetIndex(), n.cs, false)
 }
 
-func (c *Cluster) apply(n *node, e pb.Entry) {
-	if e.Index <= n.sm.applied {
+func (c *Cluster) apply(n *node, e *pb.Entry) {
+	if e.GetIndex() <= n.sm.applied {
 		return // covered by a snapshot restored meanwhile
 	}
-	if e.Index != n.sm.applied+1 {
-		c.fail("node %d applied entry %d after %d", n.id, e.Index, n.sm.applied)
+	if e.GetIndex() != n.sm.applied+1 {
+		c.fail("node %d applied entry %d after %d", n.id, e.GetIndex(), n.sm.applied)
 	}
-	switch e.Type {
+	switch e.GetType() {
 	case pb.EntryConfChange, pb.EntryConfChangeV2:
 		var cc pb.ConfChangeI
-		if e.Type == pb.EntryConfChange {
-			var v1 pb.ConfChange
-			if err := v1.Unmarshal(e.Data); err != nil {
-				c.fail("node %d: entry %d: %v", n.id, e.Index, err)
+		if e.GetType() == pb.EntryConfChange {
+			var v1 = &pb.ConfChange{}
+			if err := proto.Unmarshal(e.Data, v1); err != nil {
+				c.fail("node %d: entry %d: %v", n.id, e.GetIndex(), err)
 			}
 			cc = v1
 		} else {
-			var v2 pb.ConfChangeV2
-			if err := v2.Unmarshal(e.Data); err != nil {
-				c.fail("node %d: entry %d: %v", n.id, e.Index, err)
+			var v2 = &pb.ConfChangeV2{}
+			if err := proto.Unmarshal(e.Data, v2); err != nil {
+				c.fail("node %d: entry %d: %v", n.id, e.GetIndex(), err)
 			}
 			cc = v2
 		}
-		n.cs = *n.rn.ApplyConfChange(cc)
-		c.chk.onConfig(n, e.Index, n.cs, true)
+		n.cs = n.rn.ApplyConfChange(cc)
+		c.chk.onConfig(n, e.GetIndex(), n.cs, true)
 	}
 	n.sm.apply(e)
 	c.chk.onApply(n, e)
 }
 
-func (c *Cluster) send(from *node, m pb.Message) {
+func (c *Cluster) send(from *node, m *pb.Message) {
 	c.stats.Sent++
 	c.chk.onSend(from, m)
 	// Every message a correct node sends must pass the receiver's checks.
 	if err := raft.ValidateMessage(m); err != nil {
 		c.fail("node %d sent a message that peers reject: %v", from.id, err)
 	}
-	if m.Type == pb.MsgSnap {
+	if m.GetType() == pb.MsgSnap {
 		c.stats.SnapshotsSent++
 	}
 	if !c.healing && c.rng.Float64() < c.o.Drop {
@@ -774,19 +803,19 @@ func (c *Cluster) send(from *node, m pb.Message) {
 // wire passes m through the wire encoding, as a network would: the copy
 // shares no memory with what the sender keeps (raft assigns indexes to
 // proposed entries in place, for one).
-func (c *Cluster) wire(m pb.Message) pb.Message {
-	b, err := m.Marshal()
+func (c *Cluster) wire(m *pb.Message) *pb.Message {
+	b, err := proto.Marshal(m)
 	if err != nil {
-		c.fail("marshal %s: %v", m.Type, err)
+		c.fail("marshal %s: %v", m.GetType(), err)
 	}
-	var out pb.Message
-	if err := out.Unmarshal(b); err != nil {
-		c.fail("unmarshal %s: %v", m.Type, err)
+	var out = &pb.Message{}
+	if err := proto.Unmarshal(b, out); err != nil {
+		c.fail("unmarshal %s: %v", m.GetType(), err)
 	}
 	return out
 }
 
-func (c *Cluster) enqueue(m pb.Message) {
+func (c *Cluster) enqueue(m *pb.Message) {
 	m = c.wire(m)
 	d := int64(1 + c.rng.Intn(tickEvery))
 	if !c.healing && c.rng.Float64() < c.o.LongDelay {
@@ -796,43 +825,45 @@ func (c *Cluster) enqueue(m pb.Message) {
 	heap.Push(&c.q, envelope{at: c.now + d, seq: c.seq, m: m})
 }
 
-func (c *Cluster) dropped(m pb.Message) {
+func (c *Cluster) dropped(m *pb.Message) {
 	c.stats.Dropped++
-	from := c.nodes[m.From]
+	from := c.nodes[m.GetFrom()]
 	if from == nil || !from.up {
 		return
 	}
 	switch {
-	case m.Type == pb.MsgSnap:
+	case m.GetType() == pb.MsgSnap:
 		// The transport noticed. Now and then it claims success anyway;
 		// raft must cope by probing.
 		status := raft.SnapshotFailure
 		if c.rng.Intn(4) == 0 {
 			status = raft.SnapshotFinish
 		}
-		from.rn.ReportSnapshot(m.To, status)
+		from.rn.ReportSnapshot(m.GetTo(), status)
 	case c.rng.Intn(4) == 0:
-		from.rn.ReportUnreachable(m.To)
+		from.rn.ReportUnreachable(m.GetTo())
 	}
 }
 
 func (c *Cluster) deliver(e envelope) {
 	m := e.m
-	to := c.nodes[m.To]
-	if to == nil || !to.up || c.blocked[[2]uint64{m.From, m.To}] {
+	to := c.nodes[m.GetTo()]
+	if to == nil || !to.up || c.blocked[[2]uint64{m.GetFrom(), m.GetTo()}] {
 		c.dropped(m)
 		return
 	}
 	c.stats.Delivered++
-	c.mixFP(3, m.From, m.To, uint64(m.Type), m.Term, m.Index)
-	c.tracef("deliver %s", raft.DescribeMessage(m, nil))
+	c.mixFP(3, m.GetFrom(), m.GetTo(), uint64(m.GetType()), m.GetTerm(), m.GetIndex())
+	if c.o.Trace { // describing every message is costly
+		c.tracef("deliver %s", raft.DescribeMessage(m, nil))
+	}
 	err := to.rn.Step(m)
 	if err != nil {
 		c.tracef("step: %v", err)
 	}
-	if m.Type == pb.MsgSnap {
-		if from := c.nodes[m.From]; from != nil && from.up {
-			from.rn.ReportSnapshot(m.To, raft.SnapshotFinish)
+	if m.GetType() == pb.MsgSnap {
+		if from := c.nodes[m.GetFrom()]; from != nil && from.up {
+			from.rn.ReportSnapshot(m.GetTo(), raft.SnapshotFinish)
 		}
 	}
 	c.chk.observe(to)
@@ -938,14 +969,14 @@ func (c *Cluster) snapshot() {
 func (c *Cluster) takeSnapshot(n *node) bool {
 	hs, _, _ := n.st.InitialState()
 	i := n.sm.applied
-	if i > hs.Commit {
+	if i > hs.GetCommit() {
 		return false
 	}
 	snap, _ := n.st.Snapshot()
-	if i <= snap.Metadata.Index {
+	if i <= snap.GetMetadata().GetIndex() {
 		return false
 	}
-	if err := n.st.CreateSnapshot(i, &n.cs, n.sm.encode()); err != nil {
+	if err := n.st.CreateSnapshot(i, n.cs, n.sm.encode()); err != nil {
 		if ignorable(err) {
 			return false
 		}
@@ -966,11 +997,31 @@ type nodeStorage struct {
 	n *node
 }
 
-func (s nodeStorage) Snapshot() (pb.Snapshot, error) {
+func (s nodeStorage) Snapshot() (*pb.Snapshot, error) {
 	if s.n.st == s.Storage && s.n.up {
 		s.c.takeSnapshot(s.n)
 	}
-	return s.Storage.Snapshot()
+	snap, err := s.Storage.Snapshot()
+	s.c.freeze(s.n, "snapshot read from storage", snap)
+	return snap, err
+}
+
+// The rest of what raft reads from storage is recorded too: raft must not
+// change it (frozen.go).
+
+func (s nodeStorage) InitialState() (*pb.HardState, *pb.ConfState, error) {
+	hs, cs, err := s.Storage.InitialState()
+	s.c.freeze(s.n, "hard state read from storage", hs)
+	s.c.freeze(s.n, "configuration read from storage", cs)
+	return hs, cs, err
+}
+
+func (s nodeStorage) Entries(lo, hi, maxSize uint64) ([]*pb.Entry, error) {
+	ents, err := s.Storage.Entries(lo, hi, maxSize)
+	for _, e := range ents {
+		s.c.freeze(s.n, "entry read from storage", e)
+	}
+	return ents, err
 }
 
 func (c *Cluster) crashRandom() {
@@ -1105,20 +1156,20 @@ func (c *Cluster) confChange() {
 	cs := confStateOf(l.rn.Status().Config)
 	var cc pb.ConfChangeI
 	if len(cs.VotersOutgoing) > 0 {
-		if cs.AutoLeave {
+		if cs.GetAutoLeave() {
 			return
 		}
-		cc = pb.ConfChangeV2{}
+		cc = &pb.ConfChangeV2{}
 	} else {
 		changes := c.pickChanges(cs)
 		if len(changes) == 0 {
 			return
 		}
 		if len(changes) == 1 && c.rng.Intn(2) == 0 {
-			cc = pb.ConfChange{Type: changes[0].Type, NodeID: changes[0].NodeID}
+			cc = &pb.ConfChange{Type: changes[0].Type, NodeId: changes[0].NodeId}
 		} else {
-			cc = pb.ConfChangeV2{
-				Transition: pick(c.rng, pb.ConfChangeTransitionAuto, pb.ConfChangeTransitionJointImplicit, pb.ConfChangeTransitionJointExplicit),
+			cc = &pb.ConfChangeV2{
+				Transition: pb.ConfChangeTransition(pick(c.rng, pb.ConfChangeTransitionAuto, pb.ConfChangeTransitionJointImplicit, pb.ConfChangeTransitionJointExplicit)).Enum(),
 				Changes:    changes,
 			}
 		}
@@ -1127,55 +1178,57 @@ func (c *Cluster) confChange() {
 		return
 	}
 	for _, ch := range cc.AsV2().Changes {
-		if ch.Type != pb.ConfChangeRemoveNode && ch.NodeID >= c.nextID {
-			c.nextID = ch.NodeID + 1 // reserve the ID even if this never commits
+		if ch.GetType() != pb.ConfChangeRemoveNode && ch.GetNodeId() >= c.nextID {
+			c.nextID = ch.GetNodeId() + 1 // reserve the ID even if this never commits
 		}
 	}
 	c.stats.ConfChanges++
 	err := l.rn.ProposeConfChange(cc)
-	c.tracef("conf change at %d: %s (%v)", l.id, confchange.Describe(cc.AsV2().Changes...), err)
+	if c.o.Trace {
+		c.tracef("conf change at %d: %s (%v)", l.id, confchange.Describe(cc.AsV2().Changes...), err)
+	}
 }
 
-func (c *Cluster) pickChanges(cs pb.ConfState) []pb.ConfChangeSingle {
+func (c *Cluster) pickChanges(cs *pb.ConfState) []*pb.ConfChangeSingle {
 	k := 1
 	if c.rng.Intn(3) == 0 {
 		k = 2 + c.rng.Intn(2)
 	}
 	used := map[uint64]bool{}
 	next := c.nextID
-	var out []pb.ConfChangeSingle
+	var out []*pb.ConfChangeSingle
 	voters := len(cs.Voters)
 	for len(out) < k {
-		var ch pb.ConfChangeSingle
+		var ch = &pb.ConfChangeSingle{}
 		switch c.rng.Intn(6) {
 		case 0, 1: // add a new voter or learner
 			if next > uint64(c.o.MaxNodes) {
 				continue
 			}
-			ch = pb.ConfChangeSingle{Type: pick(c.rng, pb.ConfChangeAddNode, pb.ConfChangeAddLearnerNode), NodeID: next}
+			ch = &pb.ConfChangeSingle{Type: pb.ConfChangeType(pick(c.rng, pb.ConfChangeAddNode, pb.ConfChangeAddLearnerNode)).Enum(), NodeId: new(next)}
 			next++
 		case 2: // promote a learner
 			if len(cs.Learners) == 0 {
 				continue
 			}
-			ch = pb.ConfChangeSingle{Type: pb.ConfChangeAddNode, NodeID: cs.Learners[c.rng.Intn(len(cs.Learners))]}
+			ch = &pb.ConfChangeSingle{Type: pb.ConfChangeAddNode.Enum(), NodeId: new(cs.Learners[c.rng.Intn(len(cs.Learners))])}
 		case 3: // demote a voter
-			ch = pb.ConfChangeSingle{Type: pb.ConfChangeAddLearnerNode, NodeID: cs.Voters[c.rng.Intn(len(cs.Voters))]}
+			ch = &pb.ConfChangeSingle{Type: pb.ConfChangeAddLearnerNode.Enum(), NodeId: new(cs.Voters[c.rng.Intn(len(cs.Voters))])}
 		case 4: // remove a voter
-			ch = pb.ConfChangeSingle{Type: pb.ConfChangeRemoveNode, NodeID: cs.Voters[c.rng.Intn(len(cs.Voters))]}
+			ch = &pb.ConfChangeSingle{Type: pb.ConfChangeRemoveNode.Enum(), NodeId: new(cs.Voters[c.rng.Intn(len(cs.Voters))])}
 		default: // remove a learner
 			if len(cs.Learners) == 0 {
 				continue
 			}
-			ch = pb.ConfChangeSingle{Type: pb.ConfChangeRemoveNode, NodeID: cs.Learners[c.rng.Intn(len(cs.Learners))]}
+			ch = &pb.ConfChangeSingle{Type: pb.ConfChangeRemoveNode.Enum(), NodeId: new(cs.Learners[c.rng.Intn(len(cs.Learners))])}
 		}
-		if used[ch.NodeID] {
+		if used[ch.GetNodeId()] {
 			if c.rng.Intn(4) != 0 {
 				continue // a few repeated IDs, to exercise validation
 			}
 		}
-		used[ch.NodeID] = true
-		if ch.Type == pb.ConfChangeAddNode {
+		used[ch.GetNodeId()] = true
+		if ch.GetType() == pb.ConfChangeAddNode {
 			voters++
 		}
 		if voters > 7 {
@@ -1231,9 +1284,9 @@ func (c *Cluster) heal() {
 			continue
 		}
 		cs := confStateOf(l.rn.Status().Config)
-		if len(cs.VotersOutgoing) > 0 && !cs.AutoLeave && c.now-lastLeave > 20*tickEvery {
+		if len(cs.VotersOutgoing) > 0 && !cs.GetAutoLeave() && c.now-lastLeave > 20*tickEvery {
 			lastLeave = c.now
-			_ = l.rn.ProposeConfChange(pb.ConfChangeV2{})
+			_ = l.rn.ProposeConfChange(&pb.ConfChangeV2{})
 		}
 		if c.chk.probeIndex == 0 && c.now-lastPropose > 30*tickEvery {
 			lastPropose = c.now
@@ -1263,7 +1316,7 @@ func (c *Cluster) heal() {
 			st := n.rn.Status()
 			last, _ := n.st.LastIndex()
 			lastTerm, _ := n.st.Term(last)
-			fmt.Fprintf(&b, "\n  node %d: %s term %d vote %d lead %d log %d/%d commit %d applied %d config %s", id, st.RaftState, st.Term, st.Vote, st.Lead, lastTerm, last, st.Commit, n.sm.applied, st.Config)
+			fmt.Fprintf(&b, "\n  node %d: %s term %d vote %d lead %d log %d/%d commit %d applied %d config %s", id, st.RaftState, st.GetTerm(), st.GetVote(), st.Lead, lastTerm, last, st.GetCommit(), n.sm.applied, st.Config)
 		} else {
 			fmt.Fprintf(&b, "\n  node %d: down (decommissioned %v)", id, n.decommissioned)
 		}
@@ -1272,6 +1325,7 @@ func (c *Cluster) heal() {
 }
 
 func (c *Cluster) finalChecks() {
+	c.checkAllFrozen()
 	c.chk.checkLogs()
 	c.stats.Leaders = len(c.chk.leaders)
 	c.stats.Applied = c.chk.maxApplied
@@ -1285,16 +1339,16 @@ type smState struct {
 	digest  uint64
 }
 
-func (s *smState) apply(e pb.Entry) {
+func (s *smState) apply(e *pb.Entry) {
 	h := fnv.New64a()
 	var b [8]byte
-	for _, v := range []uint64{s.digest, e.Index, e.Term, uint64(e.Type)} {
+	for _, v := range []uint64{s.digest, e.GetIndex(), e.GetTerm(), uint64(e.GetType())} {
 		binary.LittleEndian.PutUint64(b[:], v)
 		h.Write(b[:])
 	}
 	h.Write(e.Data)
 	s.digest = h.Sum64()
-	s.applied = e.Index
+	s.applied = e.GetIndex()
 }
 
 func (s smState) encode() []byte {
@@ -1311,7 +1365,7 @@ func sortedKeys[V any](m map[uint64]V) []uint64 {
 	return out
 }
 
-func confStateOf(cfg tracker.Config) pb.ConfState {
+func confStateOf(cfg tracker.Config) *pb.ConfState {
 	pt := tracker.ProgressTracker{Config: cfg}
 	return pt.ConfState()
 }

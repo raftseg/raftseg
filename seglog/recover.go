@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/raftseg/raft/raftpb"
 )
 
@@ -561,60 +563,60 @@ func (l *Log) replayRecord(seg uint64, start int64, data []byte) error {
 	g := l.groupAt(id)
 	switch typ {
 	case recEntry, recRelocate:
-		var e raftpb.Entry
-		if err := e.Unmarshal(payload); err != nil {
+		var e = &raftpb.Entry{}
+		if err := proto.Unmarshal(payload, e); err != nil {
 			return fmt.Errorf("%w: entry: %v", ErrCorrupt, err)
 		}
 		m := &g.wmeta
 		if typ == recRelocate {
 			// A copy of a live entry: never changes the log's shape.
-			if e.Index >= m.first && e.Index <= m.last {
-				l.runsMove(g, e.Index, e.Index, seg)
+			if e.GetIndex() >= m.first && e.GetIndex() <= m.last {
+				l.runsMove(g, e.GetIndex(), e.GetIndex(), seg)
 			}
 			return nil
 		}
 		if g.born.seg == 0 {
 			g.born = position{seg, start} // as writeEntries does
 		}
-		if e.Index < m.first {
+		if e.GetIndex() < m.first {
 			return nil // compacted or superseded by a snapshot
 		}
-		if e.Index > m.last+1 {
-			return fmt.Errorf("%w: group %d: replay gap, last %d, record %d", ErrCorrupt, id, m.last, e.Index)
+		if e.GetIndex() > m.last+1 {
+			return fmt.Errorf("%w: group %d: replay gap, last %d, record %d", ErrCorrupt, id, m.last, e.GetIndex())
 		}
-		if e.Index <= m.last {
-			l.runsRemoveFrom(g, e.Index)
-			g.terms = termsTruncate(g.terms, e.Index)
+		if e.GetIndex() <= m.last {
+			l.runsRemoveFrom(g, e.GetIndex())
+			g.terms = termsTruncate(g.terms, e.GetIndex())
 		}
-		l.runsAppend(g, seg, e.Index, e.Index)
-		g.terms = termsAppend(g.terms, []raftpb.Entry{e})
-		m.last = e.Index
-		l.cacheAppend(g, []raftpb.Entry{e})
+		l.runsAppend(g, seg, e.GetIndex(), e.GetIndex())
+		g.terms = termsAppend(g.terms, []*raftpb.Entry{e})
+		m.last = e.GetIndex()
+		l.cacheAppend(g, []*raftpb.Entry{e})
 	case recHardState:
-		var hs raftpb.HardState
-		if err := hs.Unmarshal(payload); err != nil {
+		var hs = &raftpb.HardState{}
+		if err := proto.Unmarshal(payload, hs); err != nil {
 			return fmt.Errorf("%w: hard state: %v", ErrCorrupt, err)
 		}
-		g.hs = hs
+		g.hs = copyHardState(hs)
 	case recConfState:
-		var cs raftpb.ConfState
-		if err := cs.Unmarshal(payload); err != nil {
+		var cs = &raftpb.ConfState{}
+		if err := proto.Unmarshal(payload, cs); err != nil {
 			return fmt.Errorf("%w: conf state: %v", ErrCorrupt, err)
 		}
-		g.cs = cs
+		g.cs = copyConfState(cs)
 	case recSnapshot:
 		flags, s, err := decodeSnapRecord(payload)
 		if err != nil {
 			return err
 		}
 		if flags&snapApplied != 0 {
-			g.wmeta = groupMeta{first: s.meta.Index + 1, last: s.meta.Index, compactTerm: s.meta.Term}
+			g.wmeta = groupMeta{first: s.meta.GetIndex() + 1, last: s.meta.GetIndex(), compactTerm: s.meta.GetTerm()}
 			l.runsClear(g)
 			g.terms = nil
 			l.cacheClear(g)
-			g.cs = s.meta.ConfState
+			g.cs = s.meta.GetConfState()
 		} else if flags&snapSetCS != 0 {
-			g.cs = s.meta.ConfState
+			g.cs = s.meta.GetConfState()
 		}
 		g.wsnap = s
 	default:
@@ -630,14 +632,16 @@ func (l *Log) replayRecord(seg uint64, start int64, data []byte) error {
 func (l *Log) repairInvariants() {
 	for id, g := range l.groups {
 		m := g.wmeta
-		if m.first > 1 && g.hs.Commit < m.first-1 && !isEmptyHS(g.hs) {
-			l.recovery.Repairs = append(l.recovery.Repairs, fmt.Sprintf("group %d: commit %d raised to %d", id, g.hs.Commit, m.first-1))
-			g.hs.Commit = m.first - 1
+		if m.first > 1 && g.hs.GetCommit() < m.first-1 && !isEmptyHS(g.hs) {
+			l.recovery.Repairs = append(l.recovery.Repairs, fmt.Sprintf("group %d: commit %d raised to %d", id, g.hs.GetCommit(), m.first-1))
+			g.hs = withCommit(g.hs, m.first-1)
 		}
 	}
 }
 
-func isEmptyHS(hs raftpb.HardState) bool { return hs.Term == 0 && hs.Vote == 0 && hs.Commit == 0 }
+func isEmptyHS(hs *raftpb.HardState) bool {
+	return hs.GetTerm() == 0 && hs.GetVote() == 0 && hs.GetCommit() == 0
+}
 
 // checkGroups verifies that every group's runs cover exactly [first, last]
 // in existing segments and that its terms are known, and rebuilds the
@@ -677,8 +681,8 @@ func (l *Log) checkGroups() error {
 				return fmt.Errorf("%w: group %d: term of entry %d unknown", ErrCorrupt, id, m.first)
 			}
 		}
-		if g.hs.Commit > m.last {
-			return fmt.Errorf("%w: group %d: commit index %d beyond last entry %d", ErrCorrupt, id, g.hs.Commit, m.last)
+		if g.hs.GetCommit() > m.last {
+			return fmt.Errorf("%w: group %d: commit index %d beyond last entry %d", ErrCorrupt, id, g.hs.GetCommit(), m.last)
 		}
 	}
 	return nil
@@ -697,7 +701,7 @@ func (l *Log) cleanOrphans() (int, error) {
 	for _, name := range names {
 		keep := false
 		if gid, idx, ok := parseSnapName(name); ok && !strings.HasSuffix(name, ".tmp") {
-			if g := l.groups[gid]; g != nil && g.wsnap != nil && g.wsnap.ref != nil && g.wsnap.meta.Index == idx {
+			if g := l.groups[gid]; g != nil && g.wsnap != nil && g.wsnap.ref != nil && g.wsnap.meta.GetIndex() == idx {
 				keep = true
 			}
 		}
@@ -715,8 +719,8 @@ func (l *Log) cleanOrphans() (int, error) {
 	}
 	for id, g := range l.groups {
 		if g.wsnap != nil && g.wsnap.ref != nil {
-			if _, err := l.fs.Stat(l.snapPath(id, g.wsnap.meta.Index)); err != nil {
-				return 0, fmt.Errorf("%w: group %d: snapshot file for index %d is missing", ErrCorrupt, id, g.wsnap.meta.Index)
+			if _, err := l.fs.Stat(l.snapPath(id, g.wsnap.meta.GetIndex())); err != nil {
+				return 0, fmt.Errorf("%w: group %d: snapshot file for index %d is missing", ErrCorrupt, id, g.wsnap.meta.GetIndex())
 			}
 		}
 	}

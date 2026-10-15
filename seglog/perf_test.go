@@ -247,7 +247,7 @@ func (r writeResult) rate() float64 { return float64(r.ops) / r.elapsed.Seconds(
 
 // drive runs conc writers, one per group, each saving a 4-entry Ready back
 // to back until d has passed.
-func (p *perf) drive(conc, size int, d time.Duration, save func(g uint64, hs raftpb.HardState, es []raftpb.Entry) error) (int64, [][]time.Duration, time.Duration) {
+func (p *perf) drive(conc, size int, d time.Duration, save func(g uint64, hs *raftpb.HardState, es []*raftpb.Entry) error) (int64, [][]time.Duration, time.Duration) {
 	data := make([]byte, size)
 	rand.New(rand.NewSource(1)).Read(data)
 	var ops atomic.Int64
@@ -261,12 +261,12 @@ func (p *perf) drive(conc, size int, d time.Duration, save func(g uint64, hs raf
 			defer wg.Done()
 			next := uint64(1)
 			for time.Now().Before(deadline) {
-				es := make([]raftpb.Entry, 4)
+				es := make([]*raftpb.Entry, 4)
 				for k := range es {
-					es[k] = raftpb.Entry{Term: 1, Index: next + uint64(k), Data: data}
+					es[k] = &raftpb.Entry{Term: new(uint64(1)), Index: new(next + uint64(k)), Data: data}
 				}
 				t0 := time.Now()
-				if err := save(uint64(g+1), raftpb.HardState{Term: 1, Commit: next + 3}, es); err != nil {
+				if err := save(uint64(g+1), &raftpb.HardState{Term: new(uint64(1)), Commit: new(next + 3)}, es); err != nil {
 					p.t.Error(err)
 					return
 				}
@@ -286,8 +286,8 @@ func (p *perf) write(c perfCfg, conc, size int, d time.Duration) writeResult {
 	l := p.open(dir, c, nil)
 	st0, _ := l.Stats()
 	w0 := procWrites()
-	ops, lats, elapsed := p.drive(conc, size, d, func(g uint64, hs raftpb.HardState, es []raftpb.Entry) error {
-		return l.Group(g).Save(hs, es, raftpb.Snapshot{})
+	ops, lats, elapsed := p.drive(conc, size, d, func(g uint64, hs *raftpb.HardState, es []*raftpb.Entry) error {
+		return l.Group(g).Save(hs, es, &raftpb.Snapshot{})
 	})
 	st, _ := l.Stats()
 	if err := l.Close(); err != nil {
@@ -329,11 +329,11 @@ func (p *perf) read(c perfCfg, groups, perGroup int, d time.Duration) (string, s
 			defer wg.Done()
 			s := l.Group(uint64(g + 1))
 			for i := 1; i <= perGroup; i += 64 {
-				es := make([]raftpb.Entry, 64)
+				es := make([]*raftpb.Entry, 64)
 				for k := range es {
-					es[k] = raftpb.Entry{Term: 1, Index: uint64(i + k), Data: data}
+					es[k] = &raftpb.Entry{Term: new(uint64(1)), Index: new(uint64(i + k)), Data: data}
 				}
-				if err := s.Save(raftpb.HardState{Term: 1, Commit: uint64(i + 63)}, es, raftpb.Snapshot{}); err != nil {
+				if err := s.Save(&raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(i + 63))}, es, &raftpb.Snapshot{}); err != nil {
 					p.t.Error(err)
 					return
 				}
@@ -426,11 +426,11 @@ func (p *perf) churn(c perfCfg, d time.Duration) string {
 			s := l.Group(uint64(g + 1))
 			next := uint64(1)
 			for n := 0; !stop.Load(); n++ {
-				es := make([]raftpb.Entry, 4)
+				es := make([]*raftpb.Entry, 4)
 				for k := range es {
-					es[k] = raftpb.Entry{Term: 1, Index: next + uint64(k), Data: data}
+					es[k] = &raftpb.Entry{Term: new(uint64(1)), Index: new(next + uint64(k)), Data: data}
 				}
-				if err := s.Save(raftpb.HardState{Term: 1, Commit: next + 3}, es, raftpb.Snapshot{}); err != nil {
+				if err := s.Save(&raftpb.HardState{Term: new(uint64(1)), Commit: new(next + 3)}, es, &raftpb.Snapshot{}); err != nil {
 					p.t.Error(err)
 					return
 				}
@@ -504,8 +504,8 @@ func (p *perf) replay(c perfCfg, commits int) (time.Duration, RecoveryStats, int
 			defer wg.Done()
 			s := l.Group(uint64(g + 1))
 			for i := 0; i < per; i++ {
-				es := []raftpb.Entry{{Term: 1, Index: uint64(i*2 + 1), Data: data}, {Term: 1, Index: uint64(i*2 + 2), Data: data}}
-				if err := s.Save(raftpb.HardState{Term: 1, Commit: uint64(i*2 + 2)}, es, raftpb.Snapshot{}); err != nil {
+				es := []*raftpb.Entry{{Term: new(uint64(1)), Index: new(uint64(i*2 + 1)), Data: data}, {Term: new(uint64(1)), Index: new(uint64(i*2 + 2)), Data: data}}
+				if err := s.Save(&raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(i*2 + 2))}, es, &raftpb.Snapshot{}); err != nil {
 					p.t.Error(err)
 					return
 				}

@@ -107,10 +107,10 @@ func (l *Log) readSnapFile(group uint64, ref snapRef) ([]byte, error) {
 
 // newSnapInfo prepares a snapshot for storing, writing its data to a file
 // if it is large.
-func (l *Log) newSnapInfo(id uint64, snap raftpb.Snapshot) (*snapInfo, error) {
-	si := &snapInfo{meta: snap.Metadata}
+func (l *Log) newSnapInfo(id uint64, snap *raftpb.Snapshot) (*snapInfo, error) {
+	si := &snapInfo{meta: copySnapshotMetadata(snap.GetMetadata())}
 	if len(snap.Data) > l.opts.SnapshotInlineBytes {
-		ref, err := l.writeSnapFile(id, snap.Metadata.Index, snap.Data)
+		ref, err := l.writeSnapFile(id, si.meta.GetIndex(), snap.Data)
 		if err != nil {
 			return nil, err
 		}
@@ -148,7 +148,7 @@ func (l *Log) stageSnapshots(j *job, r *request) error {
 		}
 		seen[u.Group] = true
 		g := l.groupOrCreate(u.Group)
-		if u.Snapshot.Metadata.Index <= g.wsnap.index() {
+		if u.Snapshot.GetMetadata().GetIndex() <= g.wsnap.index() {
 			return raft.ErrSnapOutOfDate
 		}
 		items = append(items, item{i, g})
@@ -165,7 +165,7 @@ func (l *Log) stageSnapshots(j *job, r *request) error {
 	for k, it := range items {
 		u := r.updates[it.i]
 		si := infos[k]
-		idx := si.meta.Index
+		idx := si.meta.GetIndex()
 		rec, err := encodeSnapRecord(snapApplied, si)
 		if err != nil {
 			return err
@@ -176,8 +176,8 @@ func (l *Log) stageSnapshots(j *job, r *request) error {
 		if raft.IsEmptyHardState(hs) {
 			hs = it.g.whs
 		}
-		if hs.Commit < idx {
-			hs.Commit = idx
+		if hs.GetCommit() < idx {
+			hs = withCommit(hs, idx) // a new one: hs may be the group's
 		}
 		if hs != r.enc[it.i].hsVal {
 			if err := r.enc[it.i].setHardState(u.Group, hs); err != nil {
@@ -186,14 +186,13 @@ func (l *Log) stageSnapshots(j *job, r *request) error {
 		}
 		l.writeRecord(j.st, recSnapshot, u.Group, rec)
 		d := j.st.delta(l, u.Group)
-		d.meta = groupMeta{first: idx + 1, last: idx, compactTerm: si.meta.Term}
+		d.meta = groupMeta{first: idx + 1, last: idx, compactTerm: si.meta.GetTerm()}
 		d.reset, d.snap = true, si
-		cs := si.meta.ConfState
-		d.cs = &cs
+		d.cs = si.meta.GetConfState()
 		l.runsClear(it.g)
 		it.g.terms = nil
-		if old := it.g.wsnap; old != nil && old.ref != nil && old.meta.Index != idx {
-			oldIdx := old.meta.Index
+		if old := it.g.wsnap; old != nil && old.ref != nil && old.meta.GetIndex() != idx {
+			oldIdx := old.meta.GetIndex()
 			j.after = append(j.after, func() { l.dropSnapFile(u.Group, oldIdx) })
 		}
 		it.g.wsnap = si
@@ -206,8 +205,8 @@ func (l *Log) stageSnapshots(j *job, r *request) error {
 // by InitialState, and the log is not compacted (call Compact). The
 // snapshot is visible at once and durable with the next group commit; a
 // crash before that keeps the previous snapshot.
-func (s *Storage) CreateSnapshot(i uint64, cs *raftpb.ConfState, data []byte) (raftpb.Snapshot, error) {
-	var snap raftpb.Snapshot
+func (s *Storage) CreateSnapshot(i uint64, cs *raftpb.ConfState, data []byte) (*raftpb.Snapshot, error) {
+	snap := &raftpb.Snapshot{Metadata: &raftpb.SnapshotMetadata{}}
 	err := s.writeOp(func(g *group) error {
 		m := g.wmeta
 		if i <= g.wsnap.index() {
@@ -223,13 +222,13 @@ func (s *Storage) CreateSnapshot(i uint64, cs *raftpb.ConfState, data []byte) (r
 		s.l.mu.RLock()
 		curCS := g.cs
 		s.l.mu.RUnlock()
-		snap.Metadata.Index, snap.Metadata.Term = i, term
+		snap.Metadata.Index, snap.Metadata.Term = new(i), new(term)
 		var flags byte
 		if cs != nil {
-			snap.Metadata.ConfState = *cs
+			snap.Metadata.ConfState = copyConfState(cs)
 			flags = snapSetCS
 		} else {
-			snap.Metadata.ConfState = curCS
+			snap.Metadata.ConfState = copyConfState(curCS)
 		}
 		snap.Data = data
 		si, err := s.l.newSnapInfo(s.id, snap)
@@ -242,8 +241,8 @@ func (s *Storage) CreateSnapshot(i uint64, cs *raftpb.ConfState, data []byte) (r
 		}
 		j := &job{st: newStage()}
 		s.l.writeRecord(j.st, recSnapshot, s.id, rec)
-		if old := g.wsnap; old != nil && old.ref != nil && old.meta.Index != i {
-			oldIdx := old.meta.Index
+		if old := g.wsnap; old != nil && old.ref != nil && old.meta.GetIndex() != i {
+			oldIdx := old.meta.GetIndex()
 			j.after = append(j.after, func() { s.l.dropSnapFile(s.id, oldIdx) })
 		}
 		// Update the state before dispatching: a segment roll during dispatch
@@ -252,7 +251,7 @@ func (s *Storage) CreateSnapshot(i uint64, cs *raftpb.ConfState, data []byte) (r
 		s.l.mu.Lock()
 		g.snap = si
 		if cs != nil {
-			g.cs = *cs
+			g.cs = si.meta.GetConfState()
 		}
 		s.l.mu.Unlock()
 		s.l.dispatch(j)

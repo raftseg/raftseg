@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/raftseg/raft"
 	"github.com/raftseg/raft/raftpb"
 )
@@ -24,17 +26,17 @@ func open(t testing.TB, dir string, o Options) *Log {
 	return l
 }
 
-func ents(term, lo, hi uint64, size int) []raftpb.Entry {
-	var out []raftpb.Entry
+func ents(term, lo, hi uint64, size int) []*raftpb.Entry {
+	var out []*raftpb.Entry
 	for i := lo; i <= hi; i++ {
 		data := bytes.Repeat([]byte{byte(i)}, size)
 		copy(data, fmt.Sprintf("t%d-i%d:", term, i))
-		out = append(out, raftpb.Entry{Term: term, Index: i, Data: data})
+		out = append(out, &raftpb.Entry{Term: new(term), Index: new(i), Data: data})
 	}
 	return out
 }
 
-func mustEntries(t testing.TB, s raft.Storage, lo, hi uint64) []raftpb.Entry {
+func mustEntries(t testing.TB, s raft.Storage, lo, hi uint64) []*raftpb.Entry {
 	t.Helper()
 	got, err := s.Entries(lo, hi, math.MaxUint64)
 	if err != nil {
@@ -43,15 +45,15 @@ func mustEntries(t testing.TB, s raft.Storage, lo, hi uint64) []raftpb.Entry {
 	return got
 }
 
-func eqEntries(t testing.TB, what string, got, want []raftpb.Entry) {
+func eqEntries(t testing.TB, what string, got, want []*raftpb.Entry) {
 	t.Helper()
 	if len(got) != len(want) {
 		t.Fatalf("%s: got %d entries, want %d", what, len(got), len(want))
 	}
 	for i := range got {
-		if got[i].Index != want[i].Index || got[i].Term != want[i].Term || !bytes.Equal(got[i].Data, want[i].Data) {
+		if got[i].GetIndex() != want[i].GetIndex() || got[i].GetTerm() != want[i].GetTerm() || !bytes.Equal(got[i].Data, want[i].Data) {
 			t.Fatalf("%s: entry %d: got (i%d t%d %dB) want (i%d t%d %dB)", what, i,
-				got[i].Index, got[i].Term, len(got[i].Data), want[i].Index, want[i].Term, len(want[i].Data))
+				got[i].GetIndex(), got[i].GetTerm(), len(got[i].Data), want[i].GetIndex(), want[i].GetTerm(), len(want[i].Data))
 		}
 	}
 }
@@ -62,7 +64,7 @@ func TestAppendReadReopen(t *testing.T) {
 	dir := t.TempDir()
 	o := Options{SegmentSize: 256 << 10, CacheEntries: -1}
 	l := open(t, dir, o)
-	want := map[uint64][]raftpb.Entry{}
+	want := map[uint64][]*raftpb.Entry{}
 	for round := uint64(0); round < 20; round++ {
 		var ups []Update
 		for g := uint64(1); g <= 4; g++ {
@@ -72,7 +74,7 @@ func TestAppendReadReopen(t *testing.T) {
 			}
 			e := ents(1, round*3+1, round*3+3, size)
 			want[g] = append(want[g], e...)
-			ups = append(ups, Update{Group: g, Entries: e, HardState: raftpb.HardState{Term: 1, Commit: round*3 + 3}})
+			ups = append(ups, Update{Group: g, Entries: e, HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(round*3 + 3)}})
 		}
 		if err := l.Save(ups...); err != nil {
 			t.Fatal(err)
@@ -89,8 +91,8 @@ func TestAppendReadReopen(t *testing.T) {
 			if term, err := s.Term(60); err != nil || term != 1 {
 				t.Fatalf("Term(60) = %d, %v", term, err)
 			}
-			if hs, _, _ := s.InitialState(); hs.Commit != 60 {
-				t.Fatalf("group %d commit %d", g, hs.Commit)
+			if hs, _, _ := s.InitialState(); hs.GetCommit() != 60 {
+				t.Fatalf("group %d commit %d", g, hs.GetCommit())
 			}
 		}
 	}
@@ -111,7 +113,7 @@ func TestSizeLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := l.Group(1)
-	one := uint64(e[0].Size())
+	one := uint64(proto.Size(e[0]))
 	for _, tc := range []struct{ max, n uint64 }{{0, 1}, {one, 1}, {one*3 + 1, 3}, {math.MaxUint64, 10}} {
 		got, err := s.Entries(1, 11, tc.max)
 		if err != nil || uint64(len(got)) != tc.n {
@@ -124,10 +126,10 @@ func TestTruncateSuffix(t *testing.T) {
 	dir := t.TempDir()
 	l := open(t, dir, Options{})
 	s := l.Group(7)
-	if err := s.Save(raftpb.HardState{}, ents(1, 1, 10, 10), raftpb.Snapshot{}); err != nil {
+	if err := s.Save(&raftpb.HardState{}, ents(1, 1, 10, 10), &raftpb.Snapshot{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Save(raftpb.HardState{}, ents(2, 5, 7, 10), raftpb.Snapshot{}); err != nil {
+	if err := s.Save(&raftpb.HardState{}, ents(2, 5, 7, 10), &raftpb.Snapshot{}); err != nil {
 		t.Fatal(err)
 	}
 	want := append(ents(1, 1, 4, 10), ents(2, 5, 7, 10)...)
@@ -136,7 +138,7 @@ func TestTruncateSuffix(t *testing.T) {
 	}
 	eqEntries(t, "after truncate", mustEntries(t, s, 1, 8), want)
 	// A gap must be rejected without writing anything.
-	if err := s.Save(raftpb.HardState{}, ents(2, 9, 9, 10), raftpb.Snapshot{}); err == nil {
+	if err := s.Save(&raftpb.HardState{}, ents(2, 9, 9, 10), &raftpb.Snapshot{}); err == nil {
 		t.Fatal("expected gap error")
 	}
 	l.Close()
@@ -155,9 +157,9 @@ func TestReplayAfterIndexLoss(t *testing.T) {
 	dir := t.TempDir()
 	l := open(t, dir, Options{SegmentSize: 64 << 10, testDropIndexAfter: 2})
 	model := map[uint64]*raft.MemoryStorage{1: raft.NewMemoryStorage(), 2: raft.NewMemoryStorage()}
-	hard := map[uint64]raftpb.HardState{}
-	step := func(g uint64, e []raftpb.Entry, commit uint64) {
-		hs := raftpb.HardState{Term: e[0].Term, Vote: 1, Commit: commit}
+	hard := map[uint64]*raftpb.HardState{}
+	step := func(g uint64, e []*raftpb.Entry, commit uint64) {
+		hs := &raftpb.HardState{Term: e[0].Term, Vote: new(uint64(1)), Commit: new(commit)}
 		if err := l.Save(Update{Group: g, Entries: e, HardState: hs}); err != nil {
 			t.Fatal(err)
 		}
@@ -176,7 +178,7 @@ func TestReplayAfterIndexLoss(t *testing.T) {
 	defer l.Close()
 	for g, m := range model {
 		compareStorage(t, fmt.Sprintf("group %d", g), l.Group(g), m)
-		if hs, _, _ := l.Group(g).InitialState(); hs != hard[g] {
+		if hs, _, _ := l.Group(g).InitialState(); !sameHS(hs, hard[g]) {
 			t.Fatalf("group %d hardstate %+v want %+v", g, hs, hard[g])
 		}
 	}
@@ -333,7 +335,7 @@ func TestCompactSnapshotGC(t *testing.T) {
 		eqEntries(t, "retained", mustEntries(t, s, 141, 151), ents(1, 141, 150, 600))
 	}
 	snap, _ := l.Group(1).Snapshot()
-	if snap.Metadata.Index != 140 || string(snap.Data) != "state" {
+	if snap.Metadata.GetIndex() != 140 || string(snap.Data) != "state" {
 		t.Fatalf("snapshot %+v", snap.Metadata)
 	}
 }
@@ -342,15 +344,15 @@ func TestApplySnapshot(t *testing.T) {
 	dir := t.TempDir()
 	l := open(t, dir, Options{})
 	s := l.Group(1)
-	if err := s.Save(raftpb.HardState{}, ents(1, 1, 5, 10), raftpb.Snapshot{}); err != nil {
+	if err := s.Save(&raftpb.HardState{}, ents(1, 1, 5, 10), &raftpb.Snapshot{}); err != nil {
 		t.Fatal(err)
 	}
-	snap := raftpb.Snapshot{Data: []byte("sm"), Metadata: raftpb.SnapshotMetadata{Index: 100, Term: 4, ConfState: raftpb.ConfState{Voters: []uint64{1, 2, 3}}}}
+	snap := &raftpb.Snapshot{Data: []byte("sm"), Metadata: &raftpb.SnapshotMetadata{Index: new(uint64(100)), Term: new(uint64(4)), ConfState: &raftpb.ConfState{Voters: []uint64{1, 2, 3}}}}
 	// Snapshot and the entries that follow it arrive in the same Ready.
-	if err := s.Save(raftpb.HardState{Term: 4, Commit: 100}, ents(4, 101, 102, 10), snap); err != nil {
+	if err := s.Save(&raftpb.HardState{Term: new(uint64(4)), Commit: new(uint64(100))}, ents(4, 101, 102, 10), snap); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Save(raftpb.HardState{}, nil, snap); !errors.Is(err, raft.ErrSnapOutOfDate) {
+	if err := s.Save(&raftpb.HardState{}, nil, snap); !errors.Is(err, raft.ErrSnapOutOfDate) {
 		t.Fatalf("stale snapshot err %v", err)
 	}
 	l.Close()
@@ -381,7 +383,7 @@ func TestGroupCommitConcurrent(t *testing.T) {
 			s := l.Group(g)
 			for i := uint64(0); i < saves; i++ {
 				e := ents(1, i*2+1, i*2+2, 200)
-				if err := s.Save(raftpb.HardState{Term: 1, Commit: i * 2}, e, raftpb.Snapshot{}); err != nil {
+				if err := s.Save(&raftpb.HardState{Term: new(uint64(1)), Commit: new(i * 2)}, e, &raftpb.Snapshot{}); err != nil {
 					errs <- err
 					return
 				}
@@ -420,9 +422,9 @@ func TestSegmentEntryCountsReplayed(t *testing.T) {
 	dir := t.TempDir()
 	l := open(t, dir, Options{SegmentSize: 64 << 10, testDropIndexAfter: 1, NoAutoGC: true})
 	for i := uint64(0); i < 200; i++ {
-		u := []Update{{Group: 1 + i%3, Entries: ents(1, i/3+1, i/3+1, 700), HardState: raftpb.HardState{Term: 1, Commit: i/3 + 1}}}
+		u := []Update{{Group: 1 + i%3, Entries: ents(1, i/3+1, i/3+1, 700), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(i/3 + 1)}}}
 		if i%7 == 0 {
-			u = append(u, Update{Group: 9, HardState: raftpb.HardState{Term: 2, Vote: 1}})
+			u = append(u, Update{Group: 9, HardState: &raftpb.HardState{Term: new(uint64(2)), Vote: new(uint64(1))}})
 		}
 		if err := l.Save(u...); err != nil {
 			t.Fatal(err)

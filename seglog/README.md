@@ -2,7 +2,7 @@
 
 seglog is the durable raft log of a raftseg node: one segmented log on disk shared by every raft group the node hosts. Each group's `*seglog.Storage` implements `raft.Storage` with `raft.MemoryStorage`'s semantics; `Log.Save` persists the Readies of many groups in one group commit.
 
-It imports only the standard library, `raft` and `vfs`. There is no key-value store underneath: every change of state is a record in the log, and the log's own index structures say where each entry lives.
+It imports only the standard library, `raft`, Google's protobuf runtime (which raft's messages are generated for) and `vfs`. There is no key-value store underneath: every change of state is a record in the log, and the log's own index structures say where each entry lives.
 
 ```
 <dir>/
@@ -76,6 +76,8 @@ Each suite and what it establishes:
 | `hostile_disk_test.go` | Every file of a log, clean and after a crash, is damaged in every way storage fails: byte flips and zeroed bytes at every offset (`SEGLOG_EXHAUSTIVE=1`; a prime stride by default), lost and misdirected sectors, truncation at every length, deletion. About 28,000 images by default; the exhaustive run damaged every byte, sector and length: 1,241,449 images. Each must be recovered exactly, refused, or detected on read and by `Scrub`, or have its newest commits discarded as a reported tail. Damage to a redundant file must lose nothing. |
 | `hostile_files_test.go` | Stray segments (including numbers near 2^64), segments of an unrelated log, swapped segments, checkpoints rolled back to every earlier point, checkpoints from another log, restored deleted segments, directories where files belong, unknown files. A log that opens must keep working: it is written until segments roll, then reopened and checked. |
 | `crafted_test.go` | `FuzzCraftedRecords` writes arbitrary records (entries, HardStates, snapshots with arbitrary file references, removals, relocations, unknown types, commit markers that lie) through the log's own framing, then crashes. `FuzzCraftedCheckpoint` rewrites checkpoints field by field, with valid checksums. `Open` must refuse or cope, never panic or hang, and every API call on an opened log must return. |
+| `pb_test.go` | raft's messages are protobuf messages held by pointer, so seglog copies what it keeps and what it hands out (`pb.go`). Changing a message after passing it to seglog, or one seglog returned, changes nothing in seglog. Entries read back equal those saved, unset fields and edge values included, with the same size, from the cache and after a restart. |
+| `v0log_test.go` | `testdata/v0_log.tar.gz` is a log written by seglog before raft moved to protobuf, when raftpb was gogo's generated code. It holds entries of every type, an overwrite, a compaction, snapshots in a file and inline, a removed group and several segments. seglog must read it as that version did, each entry encoding to the same bytes, then append to it and reopen it. |
 | `alloc_test.go` | Sparse checkpoint, sidecar and segment files, and snapshot references claiming terabytes, cost neither memory nor time. |
 | `harness_test.go` | `TestCrashAtEveryOp` simulates a power cut before each of about 670 filesystem operations of a workload. Each cut is tried keeping none, all, or a random torn and reordered part of the unsynced data. Recovery itself is then power-cut, sometimes twice over. `TestErrorAtEveryOp`, `TestMetamorphicOptions`, `FuzzScanner` and `FuzzCorruptLog` are here too. |
 | `faultmodel_test.go` | `TestSyncLostAtEveryOp` fails each fsync as Linux does after a writeback error: the data stays readable but never reaches the disk. The run continues across both a power cut and a restart without one. `TestErrorAtAnyOp` fails each operation of every kind (reads, opens, stats, listings, closes, writes, syncs, renames, removals) on every file, with the caches on and off. |
@@ -83,7 +85,7 @@ Each suite and what it establishes:
 | `validate_test.go`, `forgery_test.go`, `wrap_test.go`, `incarnation_test.go` | Regression tests for the bugs below, each failing on the code before its fix. |
 | `survivors_test.go` | Tests written for the mutants that survived the first mutation run (see below). Each exercises one safeguard no other test reached on its own. |
 | `diff_test.go`, `crash_test.go`, `kill_test.go`, `chaos_test.go`, `cluster_test.go`, … | The suites carried over from raftseg v4: differential runs against MemoryStorage with crashes, random power cuts under concurrent load, real SIGKILLs, and multi-node raft chaos. |
-| `internal/raftsim` | `TestSimulationSeglog` and `TestSimulationMixed` run the deterministic raft simulator with every node's log in seglog (or mixed with in-memory nodes). This adds all the raft safety and liveness checks, crashes that strike in the middle of a Save, and several groups sharing a node's log. |
+| `internal/raftsim` | `TestSimulationSeglog` and `TestSimulationMixed` run the deterministic raft simulator with every node's log in seglog (or mixed with in-memory nodes). This adds all the raft safety and liveness checks, crashes that strike in the middle of a Save, and several groups sharing a node's log. The simulator also checks that no message raft and seglog share (entries, hard states, configurations, snapshots) changes after it is handed over. |
 | `internal/crashfs` | The crash model itself: `TestConformsToOS` checks that, without crashes, it behaves exactly like the operating system's filesystem, op by op. |
 
 **Mutation testing.** 58 mutants each put one mistake back into the engine: a checksum not checked, an fsync or directory sync left out, a deletion moved before the state that stops needing it is durable, a recovery check dropped, an off-by-one in the log's shape, a missing version bump. 55 are killed by the tests, and 3 are equivalent (the change cannot be observed), each explained. None survives. The table, the catalogue and the runner are in [docs/verification](../docs/verification/seglog-mutation.md).
@@ -123,6 +125,10 @@ The hardening costs nothing measurable. Measured against raftseg v4 (the same en
 - Saves with fsync, 128 groups: 12.5 µs (v4) and 12.1 µs (seglog) per Save, as means of five runs each.
 - The full benchmark report (`TestPerfReport`, four interleaved runs): every configuration differs from v4 by less than runs of the same version differ from each other (up to about 10%).
 
+**After raft's move to protobuf.** raft's messages became protobuf messages held by pointer, encoded by protobuf's runtime instead of gogo's generated code. Measured against seglog before the move (raftseg 3bfbd2c), on the same 2-vCPU VM, with the runs interleaved, four runs each:
+- CPU per Save, 128 groups each saving 4 entries of 1 KiB and a hard state, without fsync: 16.5 µs before and 16.3 µs after, as means. The first port took 20.3 µs; encoding each entry straight into its record, instead of encoding it and then copying it into the record, brought it back.
+- CPU per read of 100 entries of 1 KiB from disk, entry cache off: 215 µs before and 187 µs after. protobuf's decoder allocates more than gogo's (a pointer per field), which the first port showed as 265 µs; a record that fits in one chunk is now decoded where it was read, without the copy that reassembling chunks makes.
+
 Keyed checksums cost the same as unkeyed ones (CRC-32C with a different initial value), and request validation does not allocate for requests of up to 16 groups. A clean reopen takes about 0.3 ms longer, for the directory sync that makes recovered segment names durable.
 
 ## Next steps
@@ -133,4 +139,4 @@ Keyed checksums cost the same as unkeyed ones (CRC-32C with a different initial 
 
 ## Platforms
 
-Linux on 64-bit CPUs is the supported platform: durability rests on `fdatasync`, `fallocate` and `flock`. The package builds on other 64-bit Unix systems and on Windows, but Windows has no cross-process lock. It refuses to build on 32-bit platforms: the raft wire decoder, unchanged from upstream, accepts malformed messages there that 64-bit builds reject, so a 32-bit node could disagree with the rest of its cluster about which messages are valid.
+Linux on 64-bit CPUs is the supported platform: durability rests on `fdatasync`, `fallocate` and `flock`. The package builds on other 64-bit Unix systems and on Windows, but Windows has no cross-process lock. It refuses to build on 32-bit platforms, because it converts file offsets, sizes and counts to `int` freely. raft's old wire decoder was a second reason: on 32-bit builds it accepted malformed messages that 64-bit builds reject. raft's protobuf decoder does not, and raft builds on 32-bit platforms again, but seglog's own reason stands.

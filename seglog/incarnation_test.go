@@ -70,7 +70,7 @@ func TestRemovedGroupRecordNotReturned(t *testing.T) {
 			l := open(t, crashDir, memOpts(mem, Options{}))
 			save := func(size int) {
 				t.Helper()
-				if err := l.Save(Update{Group: 3, Entries: ents(1, 1, 5, size), HardState: raftpb.HardState{Term: 1, Commit: 5}}); err != nil {
+				if err := l.Save(Update{Group: 3, Entries: ents(1, 1, 5, size), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(5))}}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -133,7 +133,7 @@ func TestRemovedGroupRecordNotReturned(t *testing.T) {
 				}
 				for _, e := range es {
 					if len(e.Data) != 300 || !entryDataOK(e) {
-						t.Fatalf("entry %d: %d bytes", e.Index, len(e.Data))
+						t.Fatalf("entry %d: %d bytes", e.GetIndex(), len(e.Data))
 					}
 				}
 			}

@@ -31,7 +31,7 @@ func TestExternalSnapshots(t *testing.T) {
 	o := Options{SnapshotInlineBytes: 1 << 10}
 	l := open(t, dir, o)
 	s := l.Group(5)
-	if err := s.Save(raftpb.HardState{Term: 1, Commit: 10}, ents(1, 1, 10, 50), raftpb.Snapshot{}); err != nil {
+	if err := s.Save(&raftpb.HardState{Term: new(uint64(1)), Commit: new(uint64(10))}, ents(1, 1, 10, 50), &raftpb.Snapshot{}); err != nil {
 		t.Fatal(err)
 	}
 	big := bytes.Repeat([]byte("state"), 10000)
@@ -49,8 +49,8 @@ func TestExternalSnapshots(t *testing.T) {
 		t.Fatalf("old snapshot file not removed: %v", got)
 	}
 	// A large snapshot received from a leader.
-	recv := raftpb.Snapshot{Data: big, Metadata: raftpb.SnapshotMetadata{Index: 50, Term: 3, ConfState: raftpb.ConfState{Voters: []uint64{1, 2}}}}
-	if err := s.Save(raftpb.HardState{Term: 3, Commit: 50}, nil, recv); err != nil {
+	recv := &raftpb.Snapshot{Data: big, Metadata: &raftpb.SnapshotMetadata{Index: new(uint64(50)), Term: new(uint64(3)), ConfState: &raftpb.ConfState{Voters: []uint64{1, 2}}}}
+	if err := s.Save(&raftpb.HardState{Term: new(uint64(3)), Commit: new(uint64(50))}, nil, recv); err != nil {
 		t.Fatal(err)
 	}
 	// An orphan (e.g. from a crash before the index referred to it).
@@ -64,8 +64,8 @@ func TestExternalSnapshots(t *testing.T) {
 		t.Fatalf("orphans removed: %d", st.Recovery.OrphanFiles)
 	}
 	got, err := l.Group(5).Snapshot()
-	if err != nil || got.Metadata.Index != 50 || !bytes.Equal(got.Data, big) {
-		t.Fatalf("snapshot after reopen: %v %d", err, got.Metadata.Index)
+	if err != nil || got.Metadata.GetIndex() != 50 || !bytes.Equal(got.Data, big) {
+		t.Fatalf("snapshot after reopen: %v %d", err, got.Metadata.GetIndex())
 	}
 	l.Close()
 
@@ -96,7 +96,7 @@ func TestTailForensics(t *testing.T) {
 			t.Fatal(err)
 		}
 		for i := uint64(1); i <= 4; i++ {
-			l.Save(Update{Group: 1, Entries: ents(1, i*10-9, i*10, 300), HardState: raftpb.HardState{Term: 1, Commit: i * 10}})
+			l.Save(Update{Group: 1, Entries: ents(1, i*10-9, i*10, 300), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(i * 10)}})
 		}
 		l.crash()
 		st, _ := mem.Stat(crashDir + "/segments/" + segName(1))

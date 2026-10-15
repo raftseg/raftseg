@@ -8,6 +8,8 @@ import (
 	"math"
 	"math/rand"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/raftseg/raft"
 	pb "github.com/raftseg/raft/raftpb"
 )
@@ -19,7 +21,7 @@ type Storage interface {
 	// Save writes, in this order, a snapshot (unless empty), entries, and
 	// a hard state (unless empty). The writes need not survive a crash
 	// until Sync returns.
-	Save(snap pb.Snapshot, ents []pb.Entry, hs pb.HardState) error
+	Save(snap *pb.Snapshot, ents []*pb.Entry, hs *pb.HardState) error
 	// Sync makes every earlier write durable.
 	Sync() error
 	// CreateSnapshot records the application's state as of index i, then
@@ -52,17 +54,24 @@ type MemBackend struct {
 	// LyingSync makes Sync a no-op, so that a crash can lose acknowledged
 	// writes. Used to check that the simulator notices.
 	LyingSync bool
+	// Scribble makes reads change, in place, an entry handed out by an
+	// earlier read, as a storage engine that reuses its buffers would. Used
+	// to check that the simulator notices (frozen.go).
+	Scribble bool
 }
 
 func (b *MemBackend) Name() string {
-	if b.LyingSync {
+	switch {
+	case b.LyingSync:
 		return "mem-lying"
+	case b.Scribble:
+		return "mem-scribble"
 	}
 	return "mem"
 }
 
 func (b *MemBackend) Open(uint64) (Storage, error) {
-	return &memStorage{MemoryStorage: raft.NewMemoryStorage(), durable: raft.NewMemoryStorage(), lying: b.LyingSync}, nil
+	return &memStorage{MemoryStorage: raft.NewMemoryStorage(), durable: raft.NewMemoryStorage(), lying: b.LyingSync, scribble: b.Scribble}, nil
 }
 
 func (b *MemBackend) Crash(_ uint64, s Storage, r *rand.Rand) (Storage, error) {
@@ -75,8 +84,9 @@ func (b *MemBackend) Crash(_ uint64, s Storage, r *rand.Rand) (Storage, error) {
 	}
 	hs, _, _ := ms.durable.InitialState()
 	snap, _ := ms.durable.Snapshot()
-	if hs.Commit < snap.Metadata.Index {
-		hs.Commit = snap.Metadata.Index
+	if hs.GetCommit() < snap.GetMetadata().GetIndex() {
+		// A new hard state: the stored one may be shared.
+		hs = &pb.HardState{Term: new(hs.GetTerm()), Vote: new(hs.GetVote()), Commit: new(snap.GetMetadata().GetIndex())}
 		if err := ms.durable.SetHardState(hs); err != nil {
 			return nil, err
 		}
@@ -85,7 +95,7 @@ func (b *MemBackend) Crash(_ uint64, s Storage, r *rand.Rand) (Storage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &memStorage{MemoryStorage: live, durable: ms.durable, lying: b.LyingSync}, nil
+	return &memStorage{MemoryStorage: live, durable: ms.durable, lying: b.LyingSync, scribble: b.Scribble}, nil
 }
 
 type memStorage struct {
@@ -93,6 +103,27 @@ type memStorage struct {
 	durable             *raft.MemoryStorage // everything synced
 	pending             []func(*raft.MemoryStorage) error
 	lying               bool
+	scribble            bool
+	lastRead            []*pb.Entry // for scribble
+}
+
+func (s *memStorage) Entries(lo, hi, maxSize uint64) ([]*pb.Entry, error) {
+	if s.scribble {
+		for _, e := range s.lastRead {
+			// An application entry, so that only the check sees it.
+			if e.GetType() == pb.EntryNormal && len(e.GetData()) > 0 {
+				d := append([]byte(nil), e.GetData()...)
+				d[len(d)-1] ^= 1
+				e.Data = d
+				break
+			}
+		}
+	}
+	ents, err := s.MemoryStorage.Entries(lo, hi, maxSize)
+	if s.scribble {
+		s.lastRead = ents
+	}
+	return ents, err
 }
 
 func (s *memStorage) do(op func(*raft.MemoryStorage) error) error {
@@ -103,14 +134,14 @@ func (s *memStorage) do(op func(*raft.MemoryStorage) error) error {
 	return nil
 }
 
-func (s *memStorage) Save(snap pb.Snapshot, ents []pb.Entry, hs pb.HardState) error {
+func (s *memStorage) Save(snap *pb.Snapshot, ents []*pb.Entry, hs *pb.HardState) error {
 	if !raft.IsEmptySnap(snap) {
 		if err := s.do(func(ms *raft.MemoryStorage) error { return ms.ApplySnapshot(snap) }); err != nil {
 			return err
 		}
 	}
 	if len(ents) > 0 {
-		ents = append([]pb.Entry(nil), ents...)
+		ents = append([]*pb.Entry(nil), ents...)
 		if err := s.do(func(ms *raft.MemoryStorage) error { return ms.Append(ents) }); err != nil {
 			return err
 		}
@@ -137,9 +168,9 @@ func (s *memStorage) Sync() error {
 }
 
 func (s *memStorage) CreateSnapshot(i uint64, cs *pb.ConfState, data []byte) error {
-	c := *cs
+	c := proto.Clone(cs).(*pb.ConfState)
 	err := s.do(func(ms *raft.MemoryStorage) error {
-		_, err := ms.CreateSnapshot(i, &c, data)
+		_, err := ms.CreateSnapshot(i, c, data)
 		return err
 	})
 	if err != nil {
@@ -175,7 +206,7 @@ func cloneMemory(src *raft.MemoryStorage) (*raft.MemoryStorage, error) {
 		if err != nil {
 			return nil, err
 		}
-		for len(ents) > 0 && ents[0].Index <= snap.Metadata.Index {
+		for len(ents) > 0 && ents[0].GetIndex() <= snap.GetMetadata().GetIndex() {
 			ents = ents[1:]
 		}
 		if err := dst.Append(ents); err != nil {

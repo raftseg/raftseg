@@ -45,7 +45,7 @@ func compareStorage(t testing.TB, what string, s raft.Storage, m *raft.MemorySto
 	}
 	ms, _ := m.Snapshot()
 	ss, _ := s.Snapshot()
-	if ms.Metadata.Index != ss.Metadata.Index || ms.Metadata.Term != ss.Metadata.Term || string(ms.Data) != string(ss.Data) {
+	if ms.Metadata.GetIndex() != ss.Metadata.GetIndex() || ms.Metadata.GetTerm() != ss.Metadata.GetTerm() || string(ms.Data) != string(ss.Data) {
 		t.Fatalf("%s: snapshot %+v want %+v", what, ss.Metadata, ms.Metadata)
 	}
 }
@@ -71,7 +71,7 @@ func runDifferential(t *testing.T, seed int64) {
 	l := open(t, dir, base)
 	defer func() { l.Close() }()
 	models := map[uint64]*raft.MemoryStorage{}
-	hard := map[uint64]raftpb.HardState{}
+	hard := map[uint64]*raftpb.HardState{}
 	terms := map[uint64]uint64{}
 	for g := uint64(1); g <= groups; g++ {
 		models[g] = raft.NewMemoryStorage()
@@ -80,7 +80,7 @@ func runDifferential(t *testing.T, seed int64) {
 	verify := func(when string) {
 		for g, m := range models {
 			compareStorage(t, fmt.Sprintf("%s group %d", when, g), l.Group(g), m)
-			if hs, _, _ := l.Group(g).InitialState(); hs != hard[g] {
+			if hs, _, _ := l.Group(g).InitialState(); !sameHS(hs, hard[g]) {
 				t.Fatalf("%s group %d: hardstate %+v want %+v", when, g, hs, hard[g])
 			}
 		}
@@ -101,7 +101,7 @@ func runDifferential(t *testing.T, seed int64) {
 			size = 40 << 10
 		}
 		e := ents(terms[g], start, start+n-1, size)
-		hs := raftpb.HardState{Term: terms[g], Vote: uint64(rng.Intn(3)), Commit: start + n - 1}
+		hs := &raftpb.HardState{Term: new(terms[g]), Vote: new(uint64(rng.Intn(3))), Commit: new(start + n - 1)}
 		return Update{Group: g, Entries: e, HardState: hs}
 	}
 	applyModel := func(u Update) {
@@ -140,12 +140,12 @@ func runDifferential(t *testing.T, seed int64) {
 				ms, _ := m.Snapshot()
 				_, merr := m.CreateSnapshot(ci, nil, data)
 				_, serr := l.Group(g).CreateSnapshot(ci, nil, data)
-				if (merr == nil) != (serr == nil) || ci > ms.Metadata.Index && serr != nil {
+				if (merr == nil) != (serr == nil) || ci > ms.Metadata.GetIndex() && serr != nil {
 					t.Fatalf("CreateSnapshot(%d): %v vs model %v", ci, serr, merr)
 				}
-			case r == 7 && hard[g].Commit >= first && last >= first:
+			case r == 7 && hard[g].GetCommit() >= first && last >= first:
 				// raft compacts only applied, hence committed, entries
-				hi := min(last, hard[g].Commit)
+				hi := min(last, hard[g].GetCommit())
 				ci := first + uint64(rng.Int63n(int64(hi-first+1)))
 				if err := l.Group(g).Compact(ci); err != nil {
 					t.Fatal(err)
@@ -153,11 +153,11 @@ func runDifferential(t *testing.T, seed int64) {
 				m.Compact(ci)
 			case r == 8:
 				ms, _ := m.Snapshot()
-				idx := ms.Metadata.Index + 1 + uint64(rng.Intn(int(last)+20))
+				idx := ms.Metadata.GetIndex() + 1 + uint64(rng.Intn(int(last)+20))
 				terms[g]++
-				snap := raftpb.Snapshot{Data: []byte(fmt.Sprintf("remote-%d", idx)), Metadata: raftpb.SnapshotMetadata{Index: idx, Term: terms[g]}}
+				snap := &raftpb.Snapshot{Data: []byte(fmt.Sprintf("remote-%d", idx)), Metadata: &raftpb.SnapshotMetadata{Index: new(idx), Term: new(terms[g])}}
 				// As raft does, the Ready carrying a snapshot also commits it.
-				u := Update{Group: g, Snapshot: snap, HardState: raftpb.HardState{Term: terms[g], Commit: idx}}
+				u := Update{Group: g, Snapshot: snap, HardState: &raftpb.HardState{Term: new(terms[g]), Commit: new(idx)}}
 				if rng.Intn(2) == 0 {
 					u.Entries = ents(terms[g], idx+1, idx+3, 50)
 				}

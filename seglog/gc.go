@@ -5,6 +5,8 @@ package seglog
 import (
 	"math"
 	"sort"
+
+	"google.golang.org/protobuf/proto"
 )
 
 // GCResult reports what one GC run did.
@@ -193,13 +195,13 @@ func (l *Log) cleanSegment(seg uint64) (int, int64, error) {
 		mark := l.w.pos()
 		var size int64
 		for i := range ents {
-			data, err := ents[i].Marshal()
+			data, err := proto.Marshal(ents[i])
 			if err != nil {
 				l.w.truncate(mark)
 				return moved, bytes, err
 			}
 			loc := l.writeRecord(st, recRelocate, p.id, data)
-			st.idx = append(st.idx, pendingIdx{p.id, ents[i].Index, loc.start, loc.end})
+			st.idx = append(st.idx, pendingIdx{p.id, ents[i].GetIndex(), loc.start, loc.end})
 			size += loc.end - loc.start
 		}
 		l.runsMove(p.g, p.lo, p.hi, l.active)

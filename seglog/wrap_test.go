@@ -21,7 +21,7 @@ func TestStraySegmentNumbers(t *testing.T) {
 		mem := crashfs.New()
 		l := open(t, crashDir, memOpts(mem, harnessOpts))
 		for i := uint64(0); i < 50; i++ {
-			if err := l.Save(Update{Group: 1, Entries: ents(1, i*10+1, i*10+10, 1000), HardState: raftpb.HardState{Term: 1, Commit: i*10 + 10}}); err != nil {
+			if err := l.Save(Update{Group: 1, Entries: ents(1, i*10+1, i*10+10, 1000), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(i*10 + 10)}}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -48,7 +48,7 @@ func TestRollNeverOverwrites(t *testing.T) {
 	rewrite(t, mem, segPathN(next), []byte("precious"))
 	var err error
 	for i := uint64(0); i < 50 && err == nil; i++ {
-		err = l.Save(Update{Group: 1, Entries: ents(1, i*10+1, i*10+10, 1000), HardState: raftpb.HardState{Term: 1, Commit: i*10 + 10}})
+		err = l.Save(Update{Group: 1, Entries: ents(1, i*10+1, i*10+10, 1000), HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(i*10 + 10)}})
 	}
 	if !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("roll onto an existing file: %v", err)

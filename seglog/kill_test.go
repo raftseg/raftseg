@@ -88,8 +88,8 @@ func TestKillNine(t *testing.T) {
 				t.Fatalf("round %d group %d: %v", r, g, err)
 			}
 			for _, e := range es {
-				if !bytes.Equal(e.Data, killPayload(g, e.Index)) {
-					t.Fatalf("round %d group %d: entry %d has wrong data", r, g, e.Index)
+				if !bytes.Equal(e.Data, killPayload(g, e.GetIndex())) {
+					t.Fatalf("round %d group %d: entry %d has wrong data", r, g, e.GetIndex())
 				}
 			}
 		}
@@ -136,11 +136,11 @@ func killChild() {
 				li = fi - 1
 			}
 			n := uint64(1 + rng.Intn(6))
-			var es []raftpb.Entry
+			var es []*raftpb.Entry
 			for i := li + 1; i <= li+n; i++ {
-				es = append(es, raftpb.Entry{Term: 1, Index: i, Data: killPayload(g, i)})
+				es = append(es, &raftpb.Entry{Term: new(uint64(1)), Index: new(i), Data: killPayload(g, i)})
 			}
-			ups = append(ups, Update{Group: g, Entries: es, HardState: raftpb.HardState{Term: 1, Commit: li + n}})
+			ups = append(ups, Update{Group: g, Entries: es, HardState: &raftpb.HardState{Term: new(uint64(1)), Commit: new(li + n)}})
 		}
 		if len(ups) == 0 {
 			continue
@@ -149,7 +149,7 @@ func killChild() {
 			fail(err)
 		}
 		for _, u := range ups {
-			fmt.Fprintf(w, "ACK %d %d\n", u.Group, u.Entries[len(u.Entries)-1].Index)
+			fmt.Fprintf(w, "ACK %d %d\n", u.Group, u.Entries[len(u.Entries)-1].GetIndex())
 		}
 		if rng.Intn(20) == 0 {
 			g := uint64(1 + rng.Intn(groups))
